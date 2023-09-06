@@ -69,7 +69,6 @@
     <module>microbenchmarks</module>
     <module>bookkeeper-slogger</module>
     <module>native-io</module>
-    <module>testtools</module>
   </modules>
   <mailingLists>
     <mailingList>
@@ -1202,6 +1201,7 @@
             <artifactId>maven-surefire-plugin</artifactId>
             <version>${maven-surefire-plugin.version}</version>
             <configuration>
+              <skipTests>${skipTests}</skipTests>
               <argLine>-Xmx2G -Djava.net.preferIPv4Stack=true</argLine>
               <redirectTestOutputToFile>false</redirectTestOutputToFile>
               <forkCount>${forkCount.variable}</forkCount>
