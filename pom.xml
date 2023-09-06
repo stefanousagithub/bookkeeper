@@ -52,6 +52,9 @@
   </ciManagement>
   <modules>
     <module>buildtools</module>
+    <module>circe-checksum</module>
+    <module>bookkeeper-common</module>
+    <module>bookkeeper-common-allocator</module>
     <module>stats</module>
     <module>bookkeeper-proto</module>
     <module>bookkeeper-server</module>
@@ -66,6 +69,7 @@
     <module>microbenchmarks</module>
     <module>bookkeeper-slogger</module>
     <module>native-io</module>
+    <module>testtools</module>
   </modules>
   <mailingLists>
     <mailingList>
