@@ -1,0 +1,9 @@
+org/apache/bookkeeper/clients/admin/StorageAdminClientImpl.class
+org/apache/bookkeeper/clients/StorageClientBuilder.class
+org/apache/bookkeeper/clients/admin/StorageAdminClient.class
+org/apache/bookkeeper/clients/package-info.class
+org/apache/bookkeeper/clients/admin/SimpleStorageAdminClientImpl.class
+org/apache/bookkeeper/clients/admin/package-info.class
+org/apache/bookkeeper/clients/SimpleClientBase.class
+org/apache/bookkeeper/clients/SimpleStorageClientImpl.class
+org/apache/bookkeeper/clients/StorageClientImpl.class

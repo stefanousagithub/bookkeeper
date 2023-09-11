@@ -1,0 +1,5 @@
+org/apache/bookkeeper/http/servlet/BookieServletHttpServer.class
+org/apache/bookkeeper/http/servlet/BookieHttpServiceServlet.class
+org/apache/bookkeeper/http/servlet/BookieHttpServiceServlet$2.class
+org/apache/bookkeeper/http/servlet/package-info.class
+org/apache/bookkeeper/http/servlet/BookieHttpServiceServlet$1.class

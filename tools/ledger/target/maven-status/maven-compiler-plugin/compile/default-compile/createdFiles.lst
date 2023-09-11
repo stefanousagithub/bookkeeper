@@ -1,0 +1,13 @@
+org/apache/bookkeeper/tools/cli/BKCtl.class
+org/apache/bookkeeper/tools/cli/commands/BookieCommandGroup.class
+org/apache/bookkeeper/tools/cli/commands/CookieCommandGroup.class
+org/apache/bookkeeper/tools/cli/commands/AutoRecoveryCommandGroup.class
+org/apache/bookkeeper/tools/cli/commands/BookiesCommandGroup.class
+org/apache/bookkeeper/tools/cli/commands/LedgerCommandGroup.class
+org/apache/bookkeeper/tools/cli/commands/bookieid/SearchReplaceBookieIdCommand$Flags.class
+org/apache/bookkeeper/tools/cli/commands/bookieid/package-info.class
+org/apache/bookkeeper/tools/cli/commands/bookieid/SearchReplaceBookieIdCommand.class
+org/apache/bookkeeper/tools/cli/commands/BookieIdCommandGroup.class
+org/apache/bookkeeper/tools/cli/package-info.class
+org/apache/bookkeeper/tools/cli/commands/package-info.class
+org/apache/bookkeeper/tools/cli/commands/HealthCheckCommandGroup.class

@@ -1,0 +1,12 @@
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/tools/ledger/src/main/java/org/apache/bookkeeper/tools/cli/package-info.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/tools/ledger/src/main/java/org/apache/bookkeeper/tools/cli/commands/CookieCommandGroup.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/tools/ledger/src/main/java/org/apache/bookkeeper/tools/cli/commands/BookieIdCommandGroup.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/tools/ledger/src/main/java/org/apache/bookkeeper/tools/cli/commands/AutoRecoveryCommandGroup.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/tools/ledger/src/main/java/org/apache/bookkeeper/tools/cli/commands/bookieid/package-info.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/tools/ledger/src/main/java/org/apache/bookkeeper/tools/cli/commands/LedgerCommandGroup.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/tools/ledger/src/main/java/org/apache/bookkeeper/tools/cli/commands/BookieCommandGroup.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/tools/ledger/src/main/java/org/apache/bookkeeper/tools/cli/commands/BookiesCommandGroup.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/tools/ledger/src/main/java/org/apache/bookkeeper/tools/cli/BKCtl.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/tools/ledger/src/main/java/org/apache/bookkeeper/tools/cli/commands/bookieid/SearchReplaceBookieIdCommand.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/tools/ledger/src/main/java/org/apache/bookkeeper/tools/cli/commands/package-info.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/tools/ledger/src/main/java/org/apache/bookkeeper/tools/cli/commands/HealthCheckCommandGroup.java

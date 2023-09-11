@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<history>
+   <processor signature="9 -shared -lrt -fexceptions -lstdc++">
+      <target file="libnative-io.so" lastModified="18a84154970">
+         <source file="../../../../obj/amd64-Linux-gpp/native_io_jni.e518ae3.o" lastModified="18a841541a4"/>
+      </target>
+   </processor>
+</history>

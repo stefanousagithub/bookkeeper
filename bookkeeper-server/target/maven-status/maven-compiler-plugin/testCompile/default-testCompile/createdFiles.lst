@@ -1,0 +1,3 @@
+org/apache/bookkeeper/bookie/FileInfoTest$ReadAbsoluteTest.class
+org/apache/bookkeeper/bookie/FileInfoTest$MoveToNewLocationTest.class
+org/apache/bookkeeper/bookie/FileInfoTest.class

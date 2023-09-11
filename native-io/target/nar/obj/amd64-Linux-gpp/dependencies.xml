@@ -1,0 +1,16 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<dependencies>
+   <includePath signature="/Inative-io/target/nar/javah-include /I../../../../../../usr/java/jdk-18/include /I../../../../../../usr/java/jdk-18/include/linux">
+      <source file="../../javah-include/org_apache_bookkeeper_common_util_nativeio_NativeIOJni.h" lastModified="18a84154140">
+         <include file="../../../../../../../../../../../usr/java/jdk-18/include/jni.h"/>
+      </source>
+      <source file="../../../../src/main/native-io-jni/cpp/native_io_jni.c" lastModified="18a7588bc50">
+         <include file="../../javah-include/org_apache_bookkeeper_common_util_nativeio_NativeIOJni.h"/>
+         <sysinclude file="../../../../../../../../../../../usr/include/errno.h"/>
+         <sysinclude file="../../../../../../../../../../../usr/include/fcntl.h"/>
+         <sysinclude file="../../../../../../../../../../../usr/include/stdlib.h"/>
+         <sysinclude file="../../../../../../../../../../../usr/include/string.h"/>
+         <sysinclude file="../../../../../../../../../../../usr/include/unistd.h"/>
+      </source>
+   </includePath>
+</dependencies>

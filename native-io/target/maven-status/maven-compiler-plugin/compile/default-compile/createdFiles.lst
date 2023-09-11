@@ -1,0 +1,7 @@
+org/apache/bookkeeper/common/util/nativeio/package-info.class
+org/apache/bookkeeper/common/util/nativeio/NativeIOImpl.class
+org/apache/bookkeeper/common/util/nativeio/NativeUtils.class
+org/apache/bookkeeper/common/util/nativeio/NativeIO.class
+org/apache/bookkeeper/common/util/nativeio/NativeIOJni.class
+org/apache/bookkeeper/util/nativeio/NarSystem.class
+org/apache/bookkeeper/common/util/nativeio/NativeIOException.class

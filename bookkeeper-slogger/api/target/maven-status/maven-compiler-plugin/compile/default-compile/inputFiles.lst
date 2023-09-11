@@ -1,0 +1,7 @@
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/bookkeeper-slogger/api/src/main/java/org/apache/bookkeeper/slogger/AbstractSlogger.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/bookkeeper-slogger/api/src/main/java/org/apache/bookkeeper/slogger/package-info.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/bookkeeper-slogger/api/src/main/java/org/apache/bookkeeper/slogger/SloggableAccumulator.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/bookkeeper-slogger/api/src/main/java/org/apache/bookkeeper/slogger/Slogger.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/bookkeeper-slogger/api/src/main/java/org/apache/bookkeeper/slogger/ConsoleSlogger.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/bookkeeper-slogger/api/src/main/java/org/apache/bookkeeper/slogger/NullSlogger.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/bookkeeper-slogger/api/src/main/java/org/apache/bookkeeper/slogger/Sloggable.java

@@ -1,0 +1,12 @@
+org/apache/bookkeeper/slogger/SloggableAccumulator.class
+org/apache/bookkeeper/slogger/AbstractSlogger$2.class
+org/apache/bookkeeper/slogger/ConsoleSlogger.class
+org/apache/bookkeeper/slogger/AbstractSlogger$1.class
+org/apache/bookkeeper/slogger/package-info.class
+org/apache/bookkeeper/slogger/Slogger.class
+org/apache/bookkeeper/slogger/AbstractSlogger$Level.class
+org/apache/bookkeeper/slogger/Sloggable.class
+org/apache/bookkeeper/slogger/NullSlogger.class
+org/apache/bookkeeper/slogger/AbstractSlogger.class
+org/apache/bookkeeper/slogger/AbstractSlogger$3.class
+org/apache/bookkeeper/slogger/AbstractSlogger$CtxIterator.class

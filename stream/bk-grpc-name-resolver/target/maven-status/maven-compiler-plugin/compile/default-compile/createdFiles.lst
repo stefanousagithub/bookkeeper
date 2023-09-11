@@ -1,0 +1,3 @@
+org/apache/bookkeeper/grpc/resolver/package-info.class
+org/apache/bookkeeper/grpc/resolver/BKRegistrationNameResolver.class
+org/apache/bookkeeper/grpc/resolver/BKRegistrationNameResolverProvider.class

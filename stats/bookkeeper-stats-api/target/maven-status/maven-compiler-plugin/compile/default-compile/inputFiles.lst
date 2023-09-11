@@ -1,0 +1,16 @@
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stats/bookkeeper-stats-api/src/main/java/org/apache/bookkeeper/stats/CachingStatsLogger.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stats/bookkeeper-stats-api/src/main/java/org/apache/bookkeeper/stats/NullStatsLogger.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stats/bookkeeper-stats-api/src/main/java/org/apache/bookkeeper/stats/OpStatsData.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stats/bookkeeper-stats-api/src/main/java/org/apache/bookkeeper/stats/Gauge.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stats/bookkeeper-stats-api/src/main/java/org/apache/bookkeeper/stats/NullStatsProvider.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stats/bookkeeper-stats-api/src/main/java/org/apache/bookkeeper/stats/annotations/StatsDoc.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stats/bookkeeper-stats-api/src/main/java/org/apache/bookkeeper/stats/OpStatsLogger.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stats/bookkeeper-stats-api/src/main/java/org/apache/bookkeeper/stats/AlertStatsLogger.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stats/bookkeeper-stats-api/src/main/java/org/apache/bookkeeper/stats/Stats.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stats/bookkeeper-stats-api/src/main/java/org/apache/bookkeeper/stats/ThreadRegistry.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stats/bookkeeper-stats-api/src/main/java/org/apache/bookkeeper/stats/CachingStatsProvider.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stats/bookkeeper-stats-api/src/main/java/org/apache/bookkeeper/stats/package-info.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stats/bookkeeper-stats-api/src/main/java/org/apache/bookkeeper/stats/annotations/package-info.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stats/bookkeeper-stats-api/src/main/java/org/apache/bookkeeper/stats/StatsLogger.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stats/bookkeeper-stats-api/src/main/java/org/apache/bookkeeper/stats/Counter.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stats/bookkeeper-stats-api/src/main/java/org/apache/bookkeeper/stats/StatsProvider.java

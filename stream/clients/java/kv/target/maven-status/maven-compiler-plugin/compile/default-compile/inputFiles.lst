@@ -1,0 +1,13 @@
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stream/clients/java/kv/src/main/java/org/apache/bookkeeper/clients/impl/kv/package-info.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stream/clients/java/kv/src/main/java/org/apache/bookkeeper/clients/impl/kv/PByteBufSimpleTableImpl.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stream/clients/java/kv/src/main/java/org/apache/bookkeeper/clients/impl/kv/TableRangeFactory.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stream/clients/java/kv/src/main/java/org/apache/bookkeeper/clients/impl/kv/DeleteRequestProcessor.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stream/clients/java/kv/src/main/java/org/apache/bookkeeper/clients/impl/kv/PutRequestProcessor.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stream/clients/java/kv/src/main/java/org/apache/bookkeeper/clients/impl/kv/PByteBufTableImpl.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stream/clients/java/kv/src/main/java/org/apache/bookkeeper/clients/impl/kv/PByteBufTableRangeImpl.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stream/clients/java/kv/src/main/java/org/apache/bookkeeper/clients/impl/kv/TxnRequestProcessor.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stream/clients/java/kv/src/main/java/org/apache/bookkeeper/clients/impl/kv/ByteBufTableImpl.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stream/clients/java/kv/src/main/java/org/apache/bookkeeper/clients/impl/kv/RangeRequestProcessor.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stream/clients/java/kv/src/main/java/org/apache/bookkeeper/clients/impl/kv/interceptors/package-info.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stream/clients/java/kv/src/main/java/org/apache/bookkeeper/clients/impl/kv/KvUtils.java
+/home/stefano/Desktop/ISW2/de_angelis/bookkeeper/stream/clients/java/kv/src/main/java/org/apache/bookkeeper/clients/impl/kv/IncrementRequestProcessor.java
