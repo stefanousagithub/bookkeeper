@@ -113,7 +113,7 @@
     <test.additional.args />
 
     <!-- Stefano Costanzo -->
-    <sonar.organization>StefanoUsaGithub</sonar.organization>
+    <sonar.organization>stefanousagithub</sonar.organization>
     <sonar.host.url>https://sonarcloud.io</sonar.host.url>
 
     <!-- Stefano Costanzo -->
