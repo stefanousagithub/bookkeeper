@@ -921,7 +921,7 @@
               <goal>prepare-agent</goal>
             </goals>
           </execution>
-	  <execution>
+	      <execution>
             <id>report</id>
             <phase>prepare-package</phase>
             <goals>
