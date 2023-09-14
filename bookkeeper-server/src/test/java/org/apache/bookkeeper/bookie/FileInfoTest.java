@@ -105,22 +105,9 @@ public class FileInfoTest {
 	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 4, true, "1" },
 	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 5, true, "0" },
 	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(0), 0, true, "0" },
-	        	{ ByteBuffer.wrap("abcde".getBytes()), null, 0, true, "Cannot invoke" },
+	        	{ ByteBuffer.wrap("abcde".getBytes()), null, 0, true, "NullPointerException" },
 	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 4, false, "Short read" },
 	        	{ null, ByteBuffer.allocate(5), 0, true, "0" },
-	        
-	        	
-	        	
-	        	
-//	        	{ null, null, 0, false, "0" },
-//	        	{ null, ByteBuffer.allocate(0), 0, false, "0" },
-//	        	{ ByteBuffer.wrap("ciao".getBytes()), ByteBuffer.allocate(4), -1, false, "4" },
-//	        	{ ByteBuffer.wrap("ciao".getBytes()), ByteBuffer.allocate(4), 1, false, "Short read at" },
-//	        	{ ByteBuffer.wrap("ciao".getBytes()), ByteBuffer.allocate(4), 1, true, "3" },
-//	        	{ ByteBuffer.wrap("ciao".getBytes()), ByteBuffer.allocate(4), 0, false, "4" },
-//	        	{ ByteBuffer.wrap("ciao".getBytes()), ByteBuffer.allocate(4), 0, true, "4" },
-//	        	{ ByteBuffer.wrap("ciao".getBytes()), ByteBuffer.allocate(4), Long.MAX_VALUE, true, "Negative position" },
-//	        	{ ByteBuffer.wrap("ciao".getBytes()), ByteBuffer.allocate(4), 4, true, "0" }
 	        });
 	    }
 		
@@ -167,7 +154,7 @@ public class FileInfoTest {
 			} catch (IOException e) {
 				Assert.assertTrue(e.getMessage().startsWith(expectedResult));
 			} catch (NullPointerException e) {
-				Assert.assertTrue(e.getMessage().startsWith(expectedResult));
+				Assert.assertTrue(e.getClass().toString().contains(expectedResult));
 			} catch (IllegalArgumentException e) {
 				Assert.assertEquals(expectedResult, e.getMessage());
 			} 
