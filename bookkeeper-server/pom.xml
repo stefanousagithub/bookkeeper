@@ -155,6 +155,13 @@
       <groupId>org.apache.logging.log4j</groupId>
       <artifactId>log4j-slf4j-impl</artifactId>
     </dependency>
+    <!-- Stefano Costanzo Pit dependency -->
+    <dependency>
+		<groupId>org.pitest</groupId>
+		<artifactId>pitest-maven</artifactId>
+		<version>1.5.1</version>
+		<type>maven-plugin</type>
+	</dependency>
     <!-- testing dependencies -->
   </dependencies>
   <build>
@@ -308,19 +315,14 @@
     <profile>
       <id>PitProfile</id>
       <activation>
-        <activeByDefault>false</activeByDefault>
+        <activeByDefault>true</activeByDefault>
       </activation>
-      <properties>
-        <withHistory>true</withHistory>
-        <pitest.version>1.14.0</pitest.version>
-        <pitest.history.file>${project.build.directory}/pitest.history</pitest.history.file>
-      </properties>
       <build>
         <plugins>
           <plugin>
             <groupId>org.pitest</groupId>
             <artifactId>pitest-maven</artifactId>
-            <version>${pitest.version}</version>
+            <version>1.5.1</version>
             <configuration>
               <targetClasses>
                 <param>org.apache.bookkeeper.bookie.FileInfo</param>
@@ -331,18 +333,11 @@
               <avoidCallsTo>
                 <avoidCallsTo>org.slf4j</avoidCallsTo>
               </avoidCallsTo>
-              <historyInputFile>${pitest.history.file}</historyInputFile>
-              <historyOutputFile>${pitest.history.file}</historyOutputFile>
-              <!--<jvmArgs>
-                <jvmArg>-XX:&#45;&#45;mutationUnitSize 1</jvmArg>
-              </jvmArgs>-->
-              <!--<mutationUnitSize>1</mutationUnitSize>>-->
-              <mutateStaticInitializers>true</mutateStaticInitializers>
             </configuration>
             <executions>
               <execution>
                 <id>PIT Report Generation</id>
-                <phase>test-compile</phase>
+                <phase>test</phase>
                 <goals>
                   <goal>mutationCoverage</goal>
                 </goals>
