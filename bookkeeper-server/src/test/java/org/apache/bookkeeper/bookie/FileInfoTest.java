@@ -31,22 +31,22 @@ public class FileInfoTest {
 		@Parameters
 		public static Collection<Object[]> data() throws IOException {
 	        return Arrays.asList(new Object[][] {
-	        	//{ true, null, 0, false, null },
-//	        	{ true, File.createTempFile("origin","file"), 0, false, "true" },
-//	        	{ true, File.createTempFile("origin","file"), -1, false, "true" }, 
-//	        	{ false, File.createTempFile("origin","file"), 10, false, "false" },
-//	        	{ true, File.createTempFile("origin","file"), 10, false, "true" },
-	        	{ true, new File("/tmp/original"), 10, false, "true" },
-//	        	{ true, File.createTempFile("origin","file"), 10, true, "true" },
-//	        	{ true, File.createTempFile("origin","file"), Integer.MAX_VALUE, false, "true" }
+	        	{File.createTempFile("origin","file"), -1, true, true, "true" },
+	        	{File.createTempFile("origin","file"), 0, true, true, "true" }, 
+	        	{File.createTempFile("origin","file"), 10, true, false, "true" }, 
+	        	{File.createTempFile("origin","file"), 10, true, true, "true" },
+	        	{File.createTempFile("origin","file"), 11, true, true, "true" },
+	        	{File.createTempFile("origin","file"), Integer.MAX_VALUE, true, true, "true" },
+	        	// {null, 10, true, null}, Errore perche il file deve esistere. Altrimenti viene lanciata un eccezione
+	        	{new File("/tmp/original"), 10, true, true, "true" },
 	        });
 	    }
 		
-		public MoveToNewLocationTest(boolean create, File newFile, long size, boolean rlocfile, String expectedResult) {
-				configure(create, newFile, size, rlocfile, expectedResult);
+		public MoveToNewLocationTest(File newFile, long size, boolean create, boolean permiss, String expectedResult) {
+				configure(newFile, size, create, permiss, expectedResult);
 		}
 		
-		public void configure(boolean create, File newFile, long size, boolean rlocfile, String expectedResult) {
+		public void configure(File newFile, long size, boolean create, boolean permiss, String expectedResult) {
 			byte[] masterKey = {'a', 'b', 'c'};
 			File oldFile = new File("/tmp/original");
 			try {
@@ -56,23 +56,15 @@ public class FileInfoTest {
 				e.printStackTrace();
 			}
 			
+			if(!permiss) {
+				newFile.setWritable(false); //can't write the file
+				newFile.setReadable(false);
+			}
+			
 			this.newFile = newFile;
 			this.size = size;
 			this.expectedResult = expectedResult;
 			
-			if (rlocfile) {
-				File rlocFile =  new File(newFile.getParentFile(), newFile.getName() + IndexPersistenceMgr.RLOC);
-				rlocFile.deleteOnExit();
-				
-                FileWriter write;
-				try {
-					write = new FileWriter(rlocFile);
-	                write.write("contentofrlocfile");
-					write.close();
-				} catch (IOException e) {
-					e.printStackTrace();
-				}
-			}
 		}
 		
 		@Test
@@ -107,13 +99,26 @@ public class FileInfoTest {
 		@Parameters
 		public static Collection<Object[]> data() {
 	        return Arrays.asList(new Object[][] {
+	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), -1, true, "5" },
+	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 0, true, "5" },
+	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(4), 0, true, "4" },
+	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 4, true, "1" },
+	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 5, true, "0" },
+	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(0), 0, true, "0" },
+	        	{ ByteBuffer.wrap("abcde".getBytes()), null, 0, true, "Cannot invoke" },
+	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 4, false, "Short read" },
+	        	{ null, ByteBuffer.allocate(5), 0, true, "0" },
+	        
+	        	
+	        	
+	        	
 //	        	{ null, null, 0, false, "0" },
 //	        	{ null, ByteBuffer.allocate(0), 0, false, "0" },
 //	        	{ ByteBuffer.wrap("ciao".getBytes()), ByteBuffer.allocate(4), -1, false, "4" },
 //	        	{ ByteBuffer.wrap("ciao".getBytes()), ByteBuffer.allocate(4), 1, false, "Short read at" },
 //	        	{ ByteBuffer.wrap("ciao".getBytes()), ByteBuffer.allocate(4), 1, true, "3" },
 //	        	{ ByteBuffer.wrap("ciao".getBytes()), ByteBuffer.allocate(4), 0, false, "4" },
-	        	{ ByteBuffer.wrap("ciao".getBytes()), ByteBuffer.allocate(4), 0, true, "4" },
+//	        	{ ByteBuffer.wrap("ciao".getBytes()), ByteBuffer.allocate(4), 0, true, "4" },
 //	        	{ ByteBuffer.wrap("ciao".getBytes()), ByteBuffer.allocate(4), Long.MAX_VALUE, true, "Negative position" },
 //	        	{ ByteBuffer.wrap("ciao".getBytes()), ByteBuffer.allocate(4), 4, true, "0" }
 	        });
@@ -134,10 +139,10 @@ public class FileInfoTest {
 		}
 		
 		public void configure(ByteBuffer content, ByteBuffer bb, long start, boolean bestEffort, String expectedResult) {
-			byte[] masterKey = {'a', 'b', 'c', 'd'};
+			byte[] masterKey = {'a', 'b', 'c'};
 			
 			try {
-				fi = new FileInfo(new File("/tmp/file"), masterKey, 0);
+				fi = new FileInfo(new File("/tmp/file"), masterKey, 1);
 				
 				if (content != null) {
 					ByteBuffer[] array = new ByteBuffer[1];
@@ -162,7 +167,7 @@ public class FileInfoTest {
 			} catch (IOException e) {
 				Assert.assertTrue(e.getMessage().startsWith(expectedResult));
 			} catch (NullPointerException e) {
-				Assert.assertEquals(expectedResult, e.getMessage());
+				Assert.assertTrue(e.getMessage().startsWith(expectedResult));
 			} catch (IllegalArgumentException e) {
 				Assert.assertEquals(expectedResult, e.getMessage());
 			} 

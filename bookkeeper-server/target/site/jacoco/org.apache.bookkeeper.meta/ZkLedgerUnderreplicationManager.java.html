@@ -1,0 +1,1094 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ZkLedgerUnderreplicationManager.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache BookKeeper :: Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.bookkeeper.meta</a> &gt; <span class="el_source">ZkLedgerUnderreplicationManager.java</span></div><h1>ZkLedgerUnderreplicationManager.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.bookkeeper.meta;
+
+import static java.nio.charset.StandardCharsets.UTF_8;
+
+import com.google.common.base.Joiner;
+import com.google.protobuf.InvalidProtocolBufferException;
+import com.google.protobuf.TextFormat;
+import com.google.protobuf.TextFormat.ParseException;
+import java.net.UnknownHostException;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.function.Predicate;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import org.apache.bookkeeper.common.concurrent.FutureUtils;
+import org.apache.bookkeeper.conf.AbstractConfiguration;
+import org.apache.bookkeeper.meta.zk.ZKMetadataDriverBase;
+import org.apache.bookkeeper.net.DNS;
+import org.apache.bookkeeper.proto.BookkeeperInternalCallbacks.GenericCallback;
+import org.apache.bookkeeper.proto.DataFormats.CheckAllLedgersFormat;
+import org.apache.bookkeeper.proto.DataFormats.LedgerRereplicationLayoutFormat;
+import org.apache.bookkeeper.proto.DataFormats.LockDataFormat;
+import org.apache.bookkeeper.proto.DataFormats.PlacementPolicyCheckFormat;
+import org.apache.bookkeeper.proto.DataFormats.ReplicasCheckFormat;
+import org.apache.bookkeeper.proto.DataFormats.UnderreplicatedLedgerFormat;
+import org.apache.bookkeeper.replication.ReplicationEnableCb;
+import org.apache.bookkeeper.replication.ReplicationException;
+import org.apache.bookkeeper.replication.ReplicationException.UnavailableException;
+import org.apache.bookkeeper.util.BookKeeperConstants;
+import org.apache.bookkeeper.util.SubTreeCache;
+import org.apache.bookkeeper.util.ZkUtils;
+import org.apache.zookeeper.AddWatchMode;
+import org.apache.zookeeper.CreateMode;
+import org.apache.zookeeper.KeeperException;
+import org.apache.zookeeper.KeeperException.Code;
+import org.apache.zookeeper.WatchedEvent;
+import org.apache.zookeeper.Watcher;
+import org.apache.zookeeper.ZooDefs.Ids;
+import org.apache.zookeeper.ZooKeeper;
+import org.apache.zookeeper.data.ACL;
+import org.apache.zookeeper.data.Stat;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * ZooKeeper implementation of underreplication manager.
+ * This is implemented in a heirarchical fashion, so it'll work with
+ * FlatLedgerManagerFactory and HierarchicalLedgerManagerFactory.
+ *
+ * &lt;p&gt;Layout is:
+ * /root/underreplication/ LAYOUT
+ *                         ledgers/(hierarchicalpath)/urL(ledgerId)
+ *                         locks/(ledgerId)
+ *
+ * &lt;p&gt;The hierarchical path is created by splitting the ledger into 4 2byte
+ * segments which are represented in hexidecimal.
+ * e.g. For ledger id 0xcafebeef0000feed, the path is
+ *  cafe/beef/0000/feed/
+ */
+public class ZkLedgerUnderreplicationManager implements LedgerUnderreplicationManager {
+<span class="nc" id="L89">    static final Logger LOG = LoggerFactory.getLogger(ZkLedgerUnderreplicationManager.class);</span>
+    static final String LAYOUT = &quot;BASIC&quot;;
+    static final int LAYOUT_VERSION = 1;
+
+<span class="nc" id="L93">    private static final byte[] LOCK_DATA = getLockData();</span>
+
+    private static class Lock {
+        private final String lockZNode;
+        private final Optional&lt;Integer&gt; ledgerZNodeVersion;
+
+<span class="nc" id="L99">        Lock(String lockZNode, Optional&lt;Integer&gt; ledgerZNodeVersion) {</span>
+<span class="nc" id="L100">            this.lockZNode = lockZNode;</span>
+<span class="nc" id="L101">            this.ledgerZNodeVersion = ledgerZNodeVersion;</span>
+<span class="nc" id="L102">        }</span>
+
+        String getLockZNode() {
+<span class="nc" id="L105">            return lockZNode;</span>
+        }
+
+        Optional&lt;Integer&gt; getLedgerZNodeVersion() {
+<span class="nc" id="L109">            return ledgerZNodeVersion;</span>
+        }
+    }
+<span class="nc" id="L112">    private final Map&lt;Long, Lock&gt; heldLocks = new ConcurrentHashMap&lt;Long, Lock&gt;();</span>
+    private final Pattern idExtractionPattern;
+
+    private final String rootPath;
+    private final String basePath;
+    private final String urLedgerPath;
+    private final String urLockPath;
+    private final String layoutZNode;
+    private final AbstractConfiguration conf;
+    private final String lostBookieRecoveryDelayZnode;
+    private final String checkAllLedgersCtimeZnode;
+    private final String placementPolicyCheckCtimeZnode;
+    private final String replicasCheckCtimeZnode;
+    private final ZooKeeper zkc;
+    private final SubTreeCache subTreeCache;
+
+    public ZkLedgerUnderreplicationManager(AbstractConfiguration conf, ZooKeeper zkc)
+<span class="nc" id="L129">            throws UnavailableException, InterruptedException, ReplicationException.CompatibilityException {</span>
+<span class="nc" id="L130">        this.conf = conf;</span>
+<span class="nc" id="L131">        rootPath = ZKMetadataDriverBase.resolveZkLedgersRootPath(conf);</span>
+<span class="nc" id="L132">        basePath = getBasePath(rootPath);</span>
+<span class="nc" id="L133">        layoutZNode = basePath + '/' + BookKeeperConstants.LAYOUT_ZNODE;</span>
+<span class="nc" id="L134">        urLedgerPath = basePath</span>
+                + BookKeeperConstants.DEFAULT_ZK_LEDGERS_ROOT_PATH;
+<span class="nc" id="L136">        urLockPath = basePath + '/' + BookKeeperConstants.UNDER_REPLICATION_LOCK;</span>
+<span class="nc" id="L137">        lostBookieRecoveryDelayZnode = basePath + '/' + BookKeeperConstants.LOSTBOOKIERECOVERYDELAY_NODE;</span>
+<span class="nc" id="L138">        checkAllLedgersCtimeZnode = basePath + '/' + BookKeeperConstants.CHECK_ALL_LEDGERS_CTIME;</span>
+<span class="nc" id="L139">        placementPolicyCheckCtimeZnode = basePath + '/' + BookKeeperConstants.PLACEMENT_POLICY_CHECK_CTIME;</span>
+<span class="nc" id="L140">        replicasCheckCtimeZnode = basePath + '/' + BookKeeperConstants.REPLICAS_CHECK_CTIME;</span>
+<span class="nc" id="L141">        idExtractionPattern = Pattern.compile(&quot;urL(\\d+)$&quot;);</span>
+<span class="nc" id="L142">        this.zkc = zkc;</span>
+<span class="nc" id="L143">        this.subTreeCache = new SubTreeCache(new SubTreeCache.TreeProvider() {</span>
+            @Override
+            public List&lt;String&gt; getChildren(String path, Watcher watcher) throws InterruptedException, KeeperException {
+<span class="nc" id="L146">                return zkc.getChildren(path, watcher);</span>
+            }
+        });
+
+        try {
+<span class="nc" id="L151">            checkLayout();</span>
+<span class="nc" id="L152">        } catch (KeeperException ke) {</span>
+<span class="nc" id="L153">            throw ReplicationException.fromKeeperException(&quot;&quot;, ke);</span>
+<span class="nc" id="L154">        }</span>
+<span class="nc" id="L155">    }</span>
+
+    public static String getBasePath(String rootPath) {
+<span class="nc" id="L158">        return String.format(&quot;%s/%s&quot;, rootPath, BookKeeperConstants.UNDER_REPLICATION_NODE);</span>
+    }
+
+    public static String getUrLockPath(String rootPath) {
+<span class="nc" id="L162">        return String.format(&quot;%s/%s&quot;, getBasePath(rootPath), BookKeeperConstants.UNDER_REPLICATION_LOCK);</span>
+    }
+
+    public static byte[] getLockData() {
+<span class="nc" id="L166">        LockDataFormat.Builder lockDataBuilder = LockDataFormat.newBuilder();</span>
+        try {
+<span class="nc" id="L168">            lockDataBuilder.setBookieId(DNS.getDefaultHost(&quot;default&quot;));</span>
+<span class="nc" id="L169">        } catch (UnknownHostException uhe) {</span>
+            // if we cant get the address, ignore. it's optional
+            // in the data structure in any case
+<span class="nc" id="L172">        }</span>
+<span class="nc" id="L173">        return lockDataBuilder.build().toString().getBytes(UTF_8);</span>
+    }
+
+    private void checkLayout()
+            throws KeeperException, InterruptedException, ReplicationException.CompatibilityException {
+<span class="nc" id="L178">        List&lt;ACL&gt; zkAcls = ZkUtils.getACLs(conf);</span>
+<span class="nc bnc" id="L179" title="All 2 branches missed.">        if (zkc.exists(basePath, false) == null) {</span>
+            try {
+<span class="nc" id="L181">                zkc.create(basePath, new byte[0], zkAcls, CreateMode.PERSISTENT);</span>
+<span class="nc" id="L182">            } catch (KeeperException.NodeExistsException nee) {</span>
+                // do nothing, someone each could have created it
+<span class="nc" id="L184">            }</span>
+        }
+        while (true) {
+<span class="nc bnc" id="L187" title="All 2 branches missed.">            if (zkc.exists(layoutZNode, false) == null) {</span>
+<span class="nc" id="L188">                LedgerRereplicationLayoutFormat.Builder builder = LedgerRereplicationLayoutFormat.newBuilder();</span>
+<span class="nc" id="L189">                builder.setType(LAYOUT).setVersion(LAYOUT_VERSION);</span>
+                try {
+<span class="nc" id="L191">                    zkc.create(layoutZNode, builder.build().toString().getBytes(UTF_8),</span>
+                               zkAcls, CreateMode.PERSISTENT);
+<span class="nc" id="L193">                    break;</span>
+<span class="nc" id="L194">                } catch (KeeperException.NodeExistsException nne) {</span>
+                    // someone else managed to create it
+                }
+<span class="nc" id="L197">            } else {</span>
+<span class="nc" id="L198">                byte[] layoutData = zkc.getData(layoutZNode, false, null);</span>
+
+<span class="nc" id="L200">                LedgerRereplicationLayoutFormat.Builder builder = LedgerRereplicationLayoutFormat.newBuilder();</span>
+
+                try {
+<span class="nc" id="L203">                    TextFormat.merge(new String(layoutData, UTF_8), builder);</span>
+<span class="nc" id="L204">                    LedgerRereplicationLayoutFormat layout = builder.build();</span>
+<span class="nc bnc" id="L205" title="All 2 branches missed.">                    if (!layout.getType().equals(LAYOUT)</span>
+<span class="nc bnc" id="L206" title="All 2 branches missed.">                            || layout.getVersion() != LAYOUT_VERSION) {</span>
+<span class="nc" id="L207">                        throw new ReplicationException.CompatibilityException(</span>
+                                &quot;Incompatible layout found (&quot; + LAYOUT + &quot;:&quot; + LAYOUT_VERSION + &quot;)&quot;);
+                    }
+<span class="nc" id="L210">                } catch (TextFormat.ParseException pe) {</span>
+<span class="nc" id="L211">                    throw new ReplicationException.CompatibilityException(</span>
+                            &quot;Invalid data found&quot;, pe);
+<span class="nc" id="L213">                }</span>
+                break;
+            }
+        }
+<span class="nc bnc" id="L217" title="All 2 branches missed.">        if (zkc.exists(urLedgerPath, false) == null) {</span>
+            try {
+<span class="nc" id="L219">                zkc.create(urLedgerPath, new byte[0], zkAcls, CreateMode.PERSISTENT);</span>
+<span class="nc" id="L220">            } catch (KeeperException.NodeExistsException nee) {</span>
+                // do nothing, someone each could have created it
+<span class="nc" id="L222">            }</span>
+        }
+<span class="nc bnc" id="L224" title="All 2 branches missed.">        if (zkc.exists(urLockPath, false) == null) {</span>
+            try {
+<span class="nc" id="L226">                zkc.create(urLockPath, new byte[0], zkAcls, CreateMode.PERSISTENT);</span>
+<span class="nc" id="L227">            } catch (KeeperException.NodeExistsException nee) {</span>
+                // do nothing, someone each could have created it
+<span class="nc" id="L229">            }</span>
+        }
+<span class="nc" id="L231">    }</span>
+
+    private long getLedgerId(String path) throws NumberFormatException {
+<span class="nc" id="L234">        Matcher m = idExtractionPattern.matcher(path);</span>
+<span class="nc bnc" id="L235" title="All 2 branches missed.">        if (m.find()) {</span>
+<span class="nc" id="L236">            return Long.parseLong(m.group(1));</span>
+        } else {
+<span class="nc" id="L238">            throw new NumberFormatException(&quot;Couldn't find ledgerid in path&quot;);</span>
+        }
+    }
+
+    public static String getParentZnodePath(String base, long ledgerId) {
+<span class="nc" id="L243">        String subdir1 = String.format(&quot;%04x&quot;, ledgerId &gt;&gt; 48 &amp; 0xffff);</span>
+<span class="nc" id="L244">        String subdir2 = String.format(&quot;%04x&quot;, ledgerId &gt;&gt; 32 &amp; 0xffff);</span>
+<span class="nc" id="L245">        String subdir3 = String.format(&quot;%04x&quot;, ledgerId &gt;&gt; 16 &amp; 0xffff);</span>
+<span class="nc" id="L246">        String subdir4 = String.format(&quot;%04x&quot;, ledgerId &amp; 0xffff);</span>
+
+<span class="nc" id="L248">        return String.format(&quot;%s/%s/%s/%s/%s&quot;,</span>
+                             base, subdir1, subdir2, subdir3, subdir4);
+    }
+
+    public static String getUrLedgerZnode(String base, long ledgerId) {
+<span class="nc" id="L253">        return String.format(&quot;%s/urL%010d&quot;, getParentZnodePath(base, ledgerId), ledgerId);</span>
+    }
+
+    public static String getUrLedgerLockZnode(String base, long ledgerId) {
+<span class="nc" id="L257">        return String.format(&quot;%s/urL%010d&quot;, base, ledgerId);</span>
+    }
+
+    private String getUrLedgerZnode(long ledgerId) {
+<span class="nc" id="L261">        return getUrLedgerZnode(urLedgerPath, ledgerId);</span>
+    }
+
+    @Override
+    public UnderreplicatedLedger getLedgerUnreplicationInfo(long ledgerId)
+            throws ReplicationException.UnavailableException {
+        try {
+<span class="nc" id="L268">            String znode = getUrLedgerZnode(ledgerId);</span>
+<span class="nc" id="L269">            UnderreplicatedLedgerFormat.Builder builder = UnderreplicatedLedgerFormat.newBuilder();</span>
+<span class="nc" id="L270">            byte[] data = null;</span>
+            try {
+<span class="nc" id="L272">                data = zkc.getData(znode, false, null);</span>
+<span class="nc" id="L273">            } catch (KeeperException.NoNodeException nne) {</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">                if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L275">                    LOG.debug(&quot;Ledger: {} is not marked underreplicated&quot;, ledgerId);</span>
+                }
+<span class="nc" id="L277">                return null;</span>
+<span class="nc" id="L278">            }</span>
+<span class="nc" id="L279">            TextFormat.merge(new String(data, UTF_8), builder);</span>
+<span class="nc" id="L280">            UnderreplicatedLedgerFormat underreplicatedLedgerFormat = builder.build();</span>
+<span class="nc" id="L281">            UnderreplicatedLedger underreplicatedLedger = new UnderreplicatedLedger(ledgerId);</span>
+<span class="nc" id="L282">            List&lt;String&gt; replicaList = underreplicatedLedgerFormat.getReplicaList();</span>
+<span class="nc bnc" id="L283" title="All 2 branches missed.">            long ctime = (underreplicatedLedgerFormat.hasCtime() ? underreplicatedLedgerFormat.getCtime()</span>
+<span class="nc" id="L284">                    : UnderreplicatedLedger.UNASSIGNED_CTIME);</span>
+<span class="nc" id="L285">            underreplicatedLedger.setCtime(ctime);</span>
+<span class="nc" id="L286">            underreplicatedLedger.setReplicaList(replicaList);</span>
+<span class="nc" id="L287">            return underreplicatedLedger;</span>
+<span class="nc" id="L288">        } catch (KeeperException ke) {</span>
+<span class="nc" id="L289">            throw ReplicationException.fromKeeperException(&quot;Error contacting zookeeper&quot;, ke);</span>
+<span class="nc" id="L290">        } catch (InterruptedException ie) {</span>
+<span class="nc" id="L291">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L292">            throw new ReplicationException.UnavailableException(&quot;Interrupted while connecting zookeeper&quot;, ie);</span>
+<span class="nc" id="L293">        } catch (TextFormat.ParseException pe) {</span>
+<span class="nc" id="L294">            throw new ReplicationException.UnavailableException(&quot;Error parsing proto message&quot;, pe);</span>
+        }
+    }
+
+    @Override
+    public CompletableFuture&lt;Void&gt; markLedgerUnderreplicatedAsync(long ledgerId, Collection&lt;String&gt; missingReplicas) {
+<span class="nc bnc" id="L300" title="All 2 branches missed.">        if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L301">            LOG.debug(&quot;markLedgerUnderreplicated(ledgerId={}, missingReplica={})&quot;, ledgerId, missingReplicas);</span>
+        }
+<span class="nc" id="L303">        final List&lt;ACL&gt; zkAcls = ZkUtils.getACLs(conf);</span>
+<span class="nc" id="L304">        final String znode = getUrLedgerZnode(ledgerId);</span>
+<span class="nc" id="L305">        final CompletableFuture&lt;Void&gt; createFuture = new CompletableFuture&lt;&gt;();</span>
+<span class="nc" id="L306">        tryMarkLedgerUnderreplicatedAsync(znode, missingReplicas, zkAcls, createFuture);</span>
+<span class="nc" id="L307">        return createFuture;</span>
+    }
+
+    private void tryMarkLedgerUnderreplicatedAsync(final String znode,
+                                                   final Collection&lt;String&gt; missingReplicas,
+                                                   final List&lt;ACL&gt; zkAcls,
+                                                   final CompletableFuture&lt;Void&gt; finalFuture) {
+<span class="nc" id="L314">        final UnderreplicatedLedgerFormat.Builder builder = UnderreplicatedLedgerFormat.newBuilder();</span>
+<span class="nc bnc" id="L315" title="All 2 branches missed.">        if (conf.getStoreSystemTimeAsLedgerUnderreplicatedMarkTime()) {</span>
+<span class="nc" id="L316">            builder.setCtime(System.currentTimeMillis());</span>
+        }
+<span class="nc" id="L318">        missingReplicas.forEach(builder::addReplica);</span>
+<span class="nc" id="L319">        final byte[] urLedgerData = builder.build().toString().getBytes(UTF_8);</span>
+<span class="nc" id="L320">        ZkUtils.asyncCreateFullPathOptimistic(</span>
+            zkc, znode, urLedgerData, zkAcls, CreateMode.PERSISTENT,
+            (rc, path, ctx, name) -&gt; {
+<span class="nc bnc" id="L323" title="All 2 branches missed.">                if (Code.OK.intValue() == rc) {</span>
+<span class="nc" id="L324">                    FutureUtils.complete(finalFuture, null);</span>
+<span class="nc bnc" id="L325" title="All 2 branches missed.">                } else if (Code.NODEEXISTS.intValue() == rc) {</span>
+                    // we need to handle the case where the ledger has been marked as underreplicated
+<span class="nc" id="L327">                    handleLedgerUnderreplicatedAlreadyMarked(znode, missingReplicas, zkAcls, finalFuture);</span>
+                } else {
+<span class="nc" id="L329">                    FutureUtils.completeExceptionally(finalFuture, KeeperException.create(Code.get(rc)));</span>
+                }
+<span class="nc" id="L331">            }, null);</span>
+<span class="nc" id="L332">    }</span>
+
+
+    private void handleLedgerUnderreplicatedAlreadyMarked(final String znode,
+                                                          final Collection&lt;String&gt; missingReplicas,
+                                                          final List&lt;ACL&gt; zkAcls,
+                                                          final CompletableFuture&lt;Void&gt; finalFuture) {
+        // get the existing underreplicated ledger data
+<span class="nc" id="L340">        zkc.getData(znode, false, (getRc, getPath, getCtx, existingUrLedgerData, getStat) -&gt; {</span>
+<span class="nc bnc" id="L341" title="All 2 branches missed.">            if (Code.OK.intValue() == getRc) {</span>
+                // deserialize existing underreplicated ledger data
+<span class="nc" id="L343">                final UnderreplicatedLedgerFormat.Builder builder = UnderreplicatedLedgerFormat.newBuilder();</span>
+                try {
+<span class="nc" id="L345">                    TextFormat.merge(new String(existingUrLedgerData, UTF_8), builder);</span>
+<span class="nc" id="L346">                } catch (ParseException e) {</span>
+                    // corrupted metadata in zookeeper
+<span class="nc" id="L348">                    FutureUtils.completeExceptionally(finalFuture,</span>
+                        new ReplicationException.UnavailableException(
+                            &quot;Invalid underreplicated ledger data for ledger &quot; + znode, e));
+<span class="nc" id="L351">                    return;</span>
+<span class="nc" id="L352">                }</span>
+<span class="nc" id="L353">                UnderreplicatedLedgerFormat existingUrLedgerFormat = builder.build();</span>
+<span class="nc" id="L354">                boolean replicaAdded = false;</span>
+<span class="nc bnc" id="L355" title="All 2 branches missed.">                for (String missingReplica : missingReplicas) {</span>
+<span class="nc bnc" id="L356" title="All 2 branches missed.">                    if (existingUrLedgerFormat.getReplicaList().contains(missingReplica)) {</span>
+<span class="nc" id="L357">                        continue;</span>
+                    } else {
+<span class="nc" id="L359">                        builder.addReplica(missingReplica);</span>
+<span class="nc" id="L360">                        replicaAdded = true;</span>
+                    }
+<span class="nc" id="L362">                }</span>
+<span class="nc bnc" id="L363" title="All 2 branches missed.">                if (!replicaAdded) { // no new missing replica is added</span>
+<span class="nc" id="L364">                    FutureUtils.complete(finalFuture, null);</span>
+<span class="nc" id="L365">                    return;</span>
+                }
+<span class="nc bnc" id="L367" title="All 2 branches missed.">                if (conf.getStoreSystemTimeAsLedgerUnderreplicatedMarkTime()) {</span>
+<span class="nc" id="L368">                    builder.setCtime(System.currentTimeMillis());</span>
+                }
+<span class="nc" id="L370">                final byte[] newUrLedgerData = builder.build().toString().getBytes(UTF_8);</span>
+<span class="nc" id="L371">                zkc.setData(znode, newUrLedgerData, getStat.getVersion(), (setRc, setPath, setCtx, setStat) -&gt; {</span>
+<span class="nc bnc" id="L372" title="All 2 branches missed.">                    if (Code.OK.intValue() == setRc) {</span>
+<span class="nc" id="L373">                        FutureUtils.complete(finalFuture, null);</span>
+<span class="nc bnc" id="L374" title="All 2 branches missed.">                    } else if (Code.NONODE.intValue() == setRc) {</span>
+<span class="nc" id="L375">                        tryMarkLedgerUnderreplicatedAsync(znode, missingReplicas, zkAcls, finalFuture);</span>
+<span class="nc bnc" id="L376" title="All 2 branches missed.">                    } else if (Code.BADVERSION.intValue() == setRc) {</span>
+<span class="nc" id="L377">                        handleLedgerUnderreplicatedAlreadyMarked(znode, missingReplicas, zkAcls, finalFuture);</span>
+                    } else {
+<span class="nc" id="L379">                        FutureUtils.completeExceptionally(finalFuture, KeeperException.create(Code.get(setRc)));</span>
+                    }
+<span class="nc" id="L381">                }, null);</span>
+<span class="nc bnc" id="L382" title="All 2 branches missed.">            } else if (Code.NONODE.intValue() == getRc) {</span>
+<span class="nc" id="L383">                tryMarkLedgerUnderreplicatedAsync(znode, missingReplicas, zkAcls, finalFuture);</span>
+            } else {
+<span class="nc" id="L385">                FutureUtils.completeExceptionally(finalFuture, KeeperException.create(Code.get(getRc)));</span>
+            }
+<span class="nc" id="L387">        }, null);</span>
+<span class="nc" id="L388">    }</span>
+
+    @Override
+    public void markLedgerReplicated(long ledgerId) throws ReplicationException.UnavailableException {
+<span class="nc bnc" id="L392" title="All 2 branches missed.">        if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L393">            LOG.debug(&quot;markLedgerReplicated(ledgerId={})&quot;, ledgerId);</span>
+        }
+        try {
+<span class="nc" id="L396">            Lock l = heldLocks.get(ledgerId);</span>
+<span class="nc bnc" id="L397" title="All 2 branches missed.">            if (l != null) {</span>
+<span class="nc" id="L398">                final Optional&lt;Integer&gt; ledgerZNodeVersion = l.getLedgerZNodeVersion();</span>
+<span class="nc bnc" id="L399" title="All 2 branches missed.">                if (ledgerZNodeVersion.isPresent()) {</span>
+<span class="nc" id="L400">                    zkc.delete(getUrLedgerZnode(ledgerId), ledgerZNodeVersion.get());</span>
+
+                    try {
+                        // clean up the hierarchy
+<span class="nc" id="L404">                        String[] parts = getUrLedgerZnode(ledgerId).split(&quot;/&quot;);</span>
+<span class="nc bnc" id="L405" title="All 2 branches missed.">                        for (int i = 1; i &lt;= 4; i++) {</span>
+<span class="nc" id="L406">                            String[] p = Arrays.copyOf(parts, parts.length - i);</span>
+<span class="nc" id="L407">                            String path = Joiner.on(&quot;/&quot;).join(p);</span>
+<span class="nc" id="L408">                            Stat s = zkc.exists(path, null);</span>
+<span class="nc bnc" id="L409" title="All 2 branches missed.">                            if (s != null) {</span>
+<span class="nc" id="L410">                                zkc.delete(path, s.getVersion());</span>
+                            }
+                        }
+<span class="nc" id="L413">                    } catch (KeeperException.NotEmptyException nee) {</span>
+                        // This can happen when cleaning up the hierarchy.
+                        // It's safe to ignore, it simply means another
+                        // ledger in the same hierarchy has been marked as
+                        // underreplicated.
+<span class="nc" id="L418">                    }</span>
+                }
+            }
+<span class="nc" id="L421">        } catch (KeeperException.NoNodeException nne) {</span>
+            // this is ok
+<span class="nc" id="L423">        } catch (KeeperException.BadVersionException bve) {</span>
+            // if this is the case, some has marked the ledger
+            // for rereplication again. Leave the underreplicated
+            // znode in place, so the ledger is checked.
+<span class="nc" id="L427">        } catch (KeeperException ke) {</span>
+<span class="nc" id="L428">            LOG.error(&quot;Error deleting underreplicated ledger znode&quot;, ke);</span>
+<span class="nc" id="L429">            throw ReplicationException.fromKeeperException(&quot;Error contacting zookeeper&quot;, ke);</span>
+<span class="nc" id="L430">        } catch (InterruptedException ie) {</span>
+<span class="nc" id="L431">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L432">            throw new ReplicationException.UnavailableException(&quot;Interrupted while contacting zookeeper&quot;, ie);</span>
+        } finally {
+<span class="nc" id="L434">            releaseUnderreplicatedLedger(ledgerId);</span>
+        }
+<span class="nc" id="L436">    }</span>
+
+    /**
+     * Get a list of all the underreplicated ledgers which have been
+     * marked for rereplication, filtered by the predicate on the replicas list.
+     *
+     * &lt;p&gt;Replicas list of an underreplicated ledger is the list of the bookies which are part of
+     * the ensemble of this ledger and are currently unavailable/down.
+     *
+     * @param predicate filter to use while listing under replicated ledgers. 'null' if filtering is not required.
+     * @return an iterator which returns underreplicated ledgers.
+     */
+    @Override
+    public Iterator&lt;UnderreplicatedLedger&gt; listLedgersToRereplicate(final Predicate&lt;List&lt;String&gt;&gt; predicate) {
+<span class="nc" id="L450">        final Queue&lt;String&gt; queue = new LinkedList&lt;String&gt;();</span>
+<span class="nc" id="L451">        queue.add(urLedgerPath);</span>
+
+<span class="nc" id="L453">        return new Iterator&lt;UnderreplicatedLedger&gt;() {</span>
+<span class="nc" id="L454">            final Queue&lt;UnderreplicatedLedger&gt; curBatch = new LinkedList&lt;UnderreplicatedLedger&gt;();</span>
+
+            @Override
+            public void remove() {
+<span class="nc" id="L458">                throw new UnsupportedOperationException();</span>
+            }
+
+            @Override
+            public boolean hasNext() {
+<span class="nc bnc" id="L463" title="All 2 branches missed.">                if (curBatch.size() &gt; 0) {</span>
+<span class="nc" id="L464">                    return true;</span>
+                }
+
+<span class="nc bnc" id="L467" title="All 4 branches missed.">                while (queue.size() &gt; 0 &amp;&amp; curBatch.size() == 0) {</span>
+<span class="nc" id="L468">                    String parent = queue.remove();</span>
+                    try {
+<span class="nc bnc" id="L470" title="All 2 branches missed.">                        for (String c : zkc.getChildren(parent, false)) {</span>
+<span class="nc" id="L471">                            String child = parent + &quot;/&quot; + c;</span>
+<span class="nc bnc" id="L472" title="All 2 branches missed.">                            if (c.startsWith(&quot;urL&quot;)) {</span>
+<span class="nc" id="L473">                                long ledgerId = getLedgerId(child);</span>
+<span class="nc" id="L474">                                UnderreplicatedLedger underreplicatedLedger = getLedgerUnreplicationInfo(ledgerId);</span>
+<span class="nc bnc" id="L475" title="All 2 branches missed.">                                if (underreplicatedLedger != null) {</span>
+<span class="nc" id="L476">                                    List&lt;String&gt; replicaList = underreplicatedLedger.getReplicaList();</span>
+<span class="nc bnc" id="L477" title="All 4 branches missed.">                                    if ((predicate == null) || predicate.test(replicaList)) {</span>
+<span class="nc" id="L478">                                        curBatch.add(underreplicatedLedger);</span>
+                                    }
+                                }
+<span class="nc" id="L481">                            } else {</span>
+<span class="nc" id="L482">                                queue.add(child);</span>
+                            }
+<span class="nc" id="L484">                        }</span>
+<span class="nc" id="L485">                    } catch (InterruptedException ie) {</span>
+<span class="nc" id="L486">                        Thread.currentThread().interrupt();</span>
+<span class="nc" id="L487">                        return false;</span>
+<span class="nc" id="L488">                    } catch (KeeperException.NoNodeException nne) {</span>
+                        // ignore
+<span class="nc" id="L490">                    } catch (Exception e) {</span>
+<span class="nc" id="L491">                        throw new RuntimeException(&quot;Error reading list&quot;, e);</span>
+<span class="nc" id="L492">                    }</span>
+<span class="nc" id="L493">                }</span>
+<span class="nc bnc" id="L494" title="All 2 branches missed.">                return curBatch.size() &gt; 0;</span>
+            }
+
+            @Override
+            public UnderreplicatedLedger next() {
+<span class="nc bnc" id="L499" title="All 2 branches missed.">                assert curBatch.size() &gt; 0;</span>
+<span class="nc" id="L500">                return curBatch.remove();</span>
+            }
+        };
+    }
+
+    private long getLedgerToRereplicateFromHierarchy(String parent, long depth)
+            throws KeeperException, InterruptedException {
+<span class="nc bnc" id="L507" title="All 2 branches missed.">        if (depth == 4) {</span>
+            List&lt;String&gt; children;
+            try {
+<span class="nc" id="L510">                children = subTreeCache.getChildren(parent);</span>
+<span class="nc" id="L511">            } catch (KeeperException.NoNodeException nne) {</span>
+                // can occur if another underreplicated ledger's
+                // hierarchy is being cleaned up
+<span class="nc" id="L514">                return -1;</span>
+<span class="nc" id="L515">            }</span>
+
+<span class="nc" id="L517">            Collections.shuffle(children);</span>
+<span class="nc" id="L518">            List&lt;ACL&gt; zkAcls = ZkUtils.getACLs(conf);</span>
+<span class="nc bnc" id="L519" title="All 2 branches missed.">            while (children.size() &gt; 0) {</span>
+<span class="nc" id="L520">                String tryChild = children.get(0);</span>
+                try {
+<span class="nc" id="L522">                    List&lt;String&gt; locks = subTreeCache.getChildren(urLockPath);</span>
+<span class="nc bnc" id="L523" title="All 2 branches missed.">                    if (locks.contains(tryChild)) {</span>
+<span class="nc" id="L524">                        children.remove(tryChild);</span>
+<span class="nc" id="L525">                        continue;</span>
+                    }
+
+<span class="nc" id="L528">                    Stat stat = zkc.exists(parent + &quot;/&quot; + tryChild, false);</span>
+<span class="nc bnc" id="L529" title="All 2 branches missed.">                    if (stat == null) {</span>
+<span class="nc bnc" id="L530" title="All 2 branches missed.">                        if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L531">                            LOG.debug(&quot;{}/{} doesn't exist&quot;, parent, tryChild);</span>
+                        }
+<span class="nc" id="L533">                        children.remove(tryChild);</span>
+<span class="nc" id="L534">                        continue;</span>
+                    }
+
+<span class="nc" id="L537">                    String lockPath = urLockPath + &quot;/&quot; + tryChild;</span>
+<span class="nc" id="L538">                    long ledgerId = getLedgerId(tryChild);</span>
+<span class="nc" id="L539">                    zkc.create(lockPath, LOCK_DATA, zkAcls, CreateMode.EPHEMERAL);</span>
+<span class="nc" id="L540">                    heldLocks.put(ledgerId, new Lock(lockPath, Optional.of(stat.getVersion())));</span>
+<span class="nc" id="L541">                    return ledgerId;</span>
+<span class="nc" id="L542">                } catch (KeeperException.NodeExistsException nee) {</span>
+<span class="nc" id="L543">                    children.remove(tryChild);</span>
+<span class="nc" id="L544">                } catch (NumberFormatException nfe) {</span>
+<span class="nc" id="L545">                    children.remove(tryChild);</span>
+<span class="nc" id="L546">                }</span>
+<span class="nc" id="L547">            }</span>
+<span class="nc" id="L548">            return -1;</span>
+        }
+
+        List&lt;String&gt; children;
+        try {
+<span class="nc" id="L553">            children = subTreeCache.getChildren(parent);</span>
+<span class="nc" id="L554">        } catch (KeeperException.NoNodeException nne) {</span>
+            // can occur if another underreplicated ledger's
+            // hierarchy is being cleaned up
+<span class="nc" id="L557">            return -1;</span>
+<span class="nc" id="L558">        }</span>
+
+<span class="nc" id="L560">        Collections.shuffle(children);</span>
+
+<span class="nc bnc" id="L562" title="All 2 branches missed.">        while (children.size() &gt; 0) {</span>
+<span class="nc" id="L563">            String tryChild = children.get(0);</span>
+<span class="nc" id="L564">            String tryPath = parent + &quot;/&quot; + tryChild;</span>
+<span class="nc" id="L565">            long ledger = getLedgerToRereplicateFromHierarchy(tryPath, depth + 1);</span>
+<span class="nc bnc" id="L566" title="All 2 branches missed.">            if (ledger != -1) {</span>
+<span class="nc" id="L567">                return ledger;</span>
+            }
+<span class="nc" id="L569">            children.remove(tryChild);</span>
+<span class="nc" id="L570">        }</span>
+<span class="nc" id="L571">        return -1;</span>
+    }
+
+
+    @Override
+    public long pollLedgerToRereplicate() throws ReplicationException.UnavailableException {
+<span class="nc bnc" id="L577" title="All 2 branches missed.">        if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L578">            LOG.debug(&quot;pollLedgerToRereplicate()&quot;);</span>
+        }
+        try {
+<span class="nc" id="L581">            return getLedgerToRereplicateFromHierarchy(urLedgerPath, 0);</span>
+<span class="nc" id="L582">        } catch (KeeperException ke) {</span>
+<span class="nc" id="L583">            throw ReplicationException.fromKeeperException(&quot;Error contacting zookeeper&quot;, ke);</span>
+<span class="nc" id="L584">        } catch (InterruptedException ie) {</span>
+<span class="nc" id="L585">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L586">            throw new ReplicationException.UnavailableException(&quot;Interrupted while connecting zookeeper&quot;, ie);</span>
+        }
+    }
+
+    @Override
+    public long getLedgerToRereplicate() throws ReplicationException.UnavailableException {
+<span class="nc bnc" id="L592" title="All 2 branches missed.">        if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L593">            LOG.debug(&quot;getLedgerToRereplicate()&quot;);</span>
+        }
+        while (true) {
+<span class="nc" id="L596">            final CountDownLatch changedLatch = new CountDownLatch(1);</span>
+<span class="nc" id="L597">            Watcher w = new Watcher() {</span>
+                @Override
+                public void process(WatchedEvent e) {
+<span class="nc" id="L600">                    LOG.info(&quot;Latch countdown due to ZK event: &quot; + e);</span>
+<span class="nc" id="L601">                    changedLatch.countDown();</span>
+<span class="nc" id="L602">                }</span>
+            };
+<span class="nc" id="L604">            try (SubTreeCache.WatchGuard wg = subTreeCache.registerWatcherWithGuard(w)) {</span>
+<span class="nc" id="L605">                waitIfLedgerReplicationDisabled();</span>
+<span class="nc" id="L606">                long ledger = getLedgerToRereplicateFromHierarchy(urLedgerPath, 0);</span>
+<span class="nc bnc" id="L607" title="All 2 branches missed.">                if (ledger != -1) {</span>
+<span class="nc" id="L608">                    return ledger;</span>
+                }
+                // nothing found, wait for a watcher to trigger
+<span class="nc" id="L611">                changedLatch.await();</span>
+<span class="nc bnc" id="L612" title="All 2 branches missed.">            } catch (KeeperException ke) {</span>
+<span class="nc" id="L613">                throw ReplicationException.fromKeeperException(&quot;Error contacting zookeeper&quot;, ke);</span>
+<span class="nc" id="L614">            } catch (InterruptedException ie) {</span>
+<span class="nc" id="L615">                Thread.currentThread().interrupt();</span>
+<span class="nc" id="L616">                throw new ReplicationException.UnavailableException(&quot;Interrupted while connecting zookeeper&quot;, ie);</span>
+<span class="nc" id="L617">            }</span>
+<span class="nc" id="L618">        }</span>
+    }
+
+    private void waitIfLedgerReplicationDisabled() throws UnavailableException,
+            InterruptedException {
+<span class="nc" id="L623">        ReplicationEnableCb cb = new ReplicationEnableCb();</span>
+<span class="nc bnc" id="L624" title="All 2 branches missed.">        if (!this.isLedgerReplicationEnabled()) {</span>
+<span class="nc" id="L625">            this.notifyLedgerReplicationEnabled(cb);</span>
+<span class="nc" id="L626">            cb.await();</span>
+        }
+<span class="nc" id="L628">    }</span>
+
+    @Override
+    public void releaseUnderreplicatedLedger(long ledgerId) throws ReplicationException.UnavailableException {
+<span class="nc bnc" id="L632" title="All 2 branches missed.">        if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L633">            LOG.debug(&quot;releaseLedger(ledgerId={})&quot;, ledgerId);</span>
+        }
+        try {
+<span class="nc" id="L636">            Lock l = heldLocks.get(ledgerId);</span>
+<span class="nc bnc" id="L637" title="All 2 branches missed.">            if (l != null) {</span>
+<span class="nc" id="L638">                zkc.delete(l.getLockZNode(), -1);</span>
+            }
+<span class="nc" id="L640">        } catch (KeeperException.NoNodeException nne) {</span>
+            // this is ok
+<span class="nc" id="L642">        } catch (KeeperException ke) {</span>
+<span class="nc" id="L643">            LOG.error(&quot;Error deleting underreplicated ledger lock&quot;, ke);</span>
+<span class="nc" id="L644">            throw ReplicationException.fromKeeperException(&quot;Error contacting zookeeper&quot;, ke);</span>
+<span class="nc" id="L645">        } catch (InterruptedException ie) {</span>
+<span class="nc" id="L646">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L647">            throw new ReplicationException.UnavailableException(&quot;Interrupted while connecting zookeeper&quot;, ie);</span>
+<span class="nc" id="L648">        }</span>
+<span class="nc" id="L649">        heldLocks.remove(ledgerId);</span>
+<span class="nc" id="L650">    }</span>
+
+    @Override
+    public void close() throws ReplicationException.UnavailableException {
+<span class="nc bnc" id="L654" title="All 2 branches missed.">        if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L655">            LOG.debug(&quot;close()&quot;);</span>
+        }
+        try {
+<span class="nc bnc" id="L658" title="All 2 branches missed.">            for (Map.Entry&lt;Long, Lock&gt; e : heldLocks.entrySet()) {</span>
+<span class="nc" id="L659">                zkc.delete(e.getValue().getLockZNode(), -1);</span>
+<span class="nc" id="L660">            }</span>
+<span class="nc" id="L661">        } catch (KeeperException.NoNodeException nne) {</span>
+            // this is ok
+<span class="nc" id="L663">        } catch (KeeperException ke) {</span>
+<span class="nc" id="L664">            LOG.error(&quot;Error deleting underreplicated ledger lock&quot;, ke);</span>
+<span class="nc" id="L665">            throw ReplicationException.fromKeeperException(&quot;Error contacting zookeeper&quot;, ke);</span>
+<span class="nc" id="L666">        } catch (InterruptedException ie) {</span>
+<span class="nc" id="L667">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L668">            throw new ReplicationException.UnavailableException(&quot;Interrupted while connecting zookeeper&quot;, ie);</span>
+<span class="nc" id="L669">        }</span>
+<span class="nc" id="L670">    }</span>
+
+    @Override
+    public void disableLedgerReplication()
+            throws ReplicationException.UnavailableException {
+<span class="nc" id="L675">        List&lt;ACL&gt; zkAcls = ZkUtils.getACLs(conf);</span>
+<span class="nc bnc" id="L676" title="All 2 branches missed.">        if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L677">            LOG.debug(&quot;disableLedegerReplication()&quot;);</span>
+        }
+        try {
+<span class="nc" id="L680">            String znode = basePath + '/' + BookKeeperConstants.DISABLE_NODE;</span>
+<span class="nc" id="L681">            zkc.create(znode, &quot;&quot;.getBytes(UTF_8), zkAcls, CreateMode.PERSISTENT);</span>
+<span class="nc" id="L682">            LOG.info(&quot;Auto ledger re-replication is disabled!&quot;);</span>
+<span class="nc" id="L683">        } catch (KeeperException.NodeExistsException ke) {</span>
+<span class="nc" id="L684">            LOG.warn(&quot;AutoRecovery is already disabled!&quot;, ke);</span>
+<span class="nc" id="L685">            throw new ReplicationException.UnavailableException(</span>
+                    &quot;AutoRecovery is already disabled!&quot;, ke);
+<span class="nc" id="L687">        } catch (KeeperException ke) {</span>
+<span class="nc" id="L688">            LOG.error(&quot;Exception while stopping auto ledger re-replication&quot;, ke);</span>
+<span class="nc" id="L689">            throw ReplicationException.fromKeeperException(&quot;Exception while stopping auto ledger re-replication&quot;, ke);</span>
+<span class="nc" id="L690">        } catch (InterruptedException ie) {</span>
+<span class="nc" id="L691">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L692">            throw new ReplicationException.UnavailableException(</span>
+                    &quot;Interrupted while stopping auto ledger re-replication&quot;, ie);
+<span class="nc" id="L694">        }</span>
+<span class="nc" id="L695">    }</span>
+
+    @Override
+    public void enableLedgerReplication()
+            throws ReplicationException.UnavailableException {
+<span class="nc bnc" id="L700" title="All 2 branches missed.">        if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L701">            LOG.debug(&quot;enableLedegerReplication()&quot;);</span>
+        }
+        try {
+<span class="nc" id="L704">            zkc.delete(basePath + '/' + BookKeeperConstants.DISABLE_NODE, -1);</span>
+<span class="nc" id="L705">            LOG.info(&quot;Resuming automatic ledger re-replication&quot;);</span>
+<span class="nc" id="L706">        } catch (KeeperException.NoNodeException ke) {</span>
+<span class="nc" id="L707">            LOG.warn(&quot;AutoRecovery is already enabled!&quot;, ke);</span>
+<span class="nc" id="L708">            throw new ReplicationException.UnavailableException(</span>
+                    &quot;AutoRecovery is already enabled!&quot;, ke);
+<span class="nc" id="L710">        } catch (KeeperException ke) {</span>
+<span class="nc" id="L711">            LOG.error(&quot;Exception while resuming ledger replication&quot;, ke);</span>
+<span class="nc" id="L712">            throw ReplicationException.fromKeeperException(&quot;Exception while resuming auto ledger re-replication&quot;, ke);</span>
+<span class="nc" id="L713">        } catch (InterruptedException ie) {</span>
+<span class="nc" id="L714">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L715">            throw new ReplicationException.UnavailableException(</span>
+                    &quot;Interrupted while resuming auto ledger re-replication&quot;, ie);
+<span class="nc" id="L717">        }</span>
+<span class="nc" id="L718">    }</span>
+
+    @Override
+    public boolean isLedgerReplicationEnabled()
+            throws ReplicationException.UnavailableException {
+<span class="nc bnc" id="L723" title="All 2 branches missed.">        if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L724">            LOG.debug(&quot;isLedgerReplicationEnabled()&quot;);</span>
+        }
+        try {
+<span class="nc bnc" id="L727" title="All 2 branches missed.">            return null == zkc.exists(basePath + '/'</span>
+                + BookKeeperConstants.DISABLE_NODE, false);
+<span class="nc" id="L729">        } catch (KeeperException ke) {</span>
+<span class="nc" id="L730">            LOG.error(&quot;Error while checking the state of &quot;</span>
+                    + &quot;ledger re-replication&quot;, ke);
+<span class="nc" id="L732">            throw ReplicationException.fromKeeperException(&quot;Error contacting zookeeper&quot;, ke);</span>
+<span class="nc" id="L733">        } catch (InterruptedException ie) {</span>
+<span class="nc" id="L734">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L735">            throw new ReplicationException.UnavailableException(</span>
+                    &quot;Interrupted while contacting zookeeper&quot;, ie);
+        }
+    }
+
+    @Override
+    public void notifyLedgerReplicationEnabled(final GenericCallback&lt;Void&gt; cb)
+            throws ReplicationException.UnavailableException {
+<span class="nc bnc" id="L743" title="All 2 branches missed.">        if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L744">            LOG.debug(&quot;notifyLedgerReplicationEnabled()&quot;);</span>
+        }
+<span class="nc" id="L746">        Watcher w = new Watcher() {</span>
+            @Override
+            public void process(WatchedEvent e) {
+<span class="nc bnc" id="L749" title="All 2 branches missed.">                if (e.getType() == Watcher.Event.EventType.NodeDeleted) {</span>
+<span class="nc" id="L750">                    LOG.info(&quot;LedgerReplication is enabled externally through Zookeeper, &quot;</span>
+                            + &quot;since DISABLE_NODE ZNode is deleted&quot;);
+<span class="nc" id="L752">                    cb.operationComplete(0, null);</span>
+                }
+<span class="nc" id="L754">            }</span>
+        };
+        try {
+<span class="nc bnc" id="L757" title="All 2 branches missed.">            if (null == zkc.exists(basePath + '/'</span>
+                    + BookKeeperConstants.DISABLE_NODE, w)) {
+<span class="nc" id="L759">                LOG.info(&quot;LedgerReplication is enabled externally through Zookeeper, &quot;</span>
+                        + &quot;since DISABLE_NODE ZNode is deleted&quot;);
+<span class="nc" id="L761">                cb.operationComplete(0, null);</span>
+<span class="nc" id="L762">                return;</span>
+            }
+<span class="nc" id="L764">        } catch (KeeperException ke) {</span>
+<span class="nc" id="L765">            LOG.error(&quot;Error while checking the state of &quot;</span>
+                    + &quot;ledger re-replication&quot;, ke);
+<span class="nc" id="L767">            throw ReplicationException.fromKeeperException(&quot;Error contacting zookeeper&quot;, ke);</span>
+<span class="nc" id="L768">        } catch (InterruptedException ie) {</span>
+<span class="nc" id="L769">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L770">            throw new ReplicationException.UnavailableException(</span>
+                    &quot;Interrupted while contacting zookeeper&quot;, ie);
+<span class="nc" id="L772">        }</span>
+<span class="nc" id="L773">    }</span>
+
+    /**
+     * Check whether the ledger is being replicated by any bookie.
+     */
+    @Override
+    public boolean isLedgerBeingReplicated(long ledgerId) throws ReplicationException {
+        try {
+<span class="nc bnc" id="L781" title="All 2 branches missed.">            return zkc.exists(getUrLedgerLockZnode(urLockPath, ledgerId), false) != null;</span>
+<span class="nc" id="L782">        } catch (Exception e) {</span>
+<span class="nc" id="L783">            throw new ReplicationException.UnavailableException(&quot;Failed to check ledger lock&quot;, e);</span>
+        }
+    }
+
+    /**
+     * Acquire the underreplicated ledger lock.
+     */
+    public static String acquireUnderreplicatedLedgerLock(ZooKeeper zkc, String zkLedgersRootPath,
+        long ledgerId, List&lt;ACL&gt; zkAcls)
+            throws UnavailableException, InterruptedException {
+        try {
+<span class="nc" id="L794">            final String lockPath = getUrLedgerLockZnode(getUrLockPath(zkLedgersRootPath), ledgerId);</span>
+<span class="nc" id="L795">            ZkUtils.createFullPathOptimistic(zkc, lockPath, LOCK_DATA, zkAcls, CreateMode.EPHEMERAL);</span>
+<span class="nc" id="L796">            return lockPath;</span>
+<span class="nc" id="L797">        } catch (KeeperException ke) {</span>
+<span class="nc" id="L798">            throw ReplicationException.fromKeeperException(&quot;Error contacting zookeeper&quot;, ke);</span>
+        }
+    }
+
+    @Override
+    public void acquireUnderreplicatedLedger(long ledgerId)
+            throws ReplicationException  {
+        try {
+<span class="nc" id="L806">            final String lockPath = acquireUnderreplicatedLedgerLock(zkc, rootPath, ledgerId, ZkUtils.getACLs(conf));</span>
+<span class="nc" id="L807">            heldLocks.put(ledgerId, new Lock(lockPath, Optional.empty()));</span>
+<span class="nc" id="L808">        } catch (Exception e) {</span>
+<span class="nc" id="L809">            throw new ReplicationException.UnavailableException(</span>
+                    &quot;Failed to acquire underreplicated ledger lock for &quot; + ledgerId, e);
+<span class="nc" id="L811">        }</span>
+<span class="nc" id="L812">    }</span>
+
+    @Override
+    public boolean initializeLostBookieRecoveryDelay(int lostBookieRecoveryDelay) throws UnavailableException {
+<span class="nc bnc" id="L816" title="All 2 branches missed.">        if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L817">            LOG.debug(&quot;initializeLostBookieRecoveryDelay()&quot;);</span>
+        }
+        try {
+<span class="nc" id="L820">            zkc.create(lostBookieRecoveryDelayZnode, Integer.toString(lostBookieRecoveryDelay).getBytes(UTF_8),</span>
+                    Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
+<span class="nc" id="L822">        } catch (KeeperException.NodeExistsException ke) {</span>
+<span class="nc" id="L823">            LOG.info(&quot;lostBookieRecoveryDelay Znode is already present, so using &quot;</span>
+                    + &quot;existing lostBookieRecoveryDelay Znode value&quot;);
+<span class="nc" id="L825">            return false;</span>
+<span class="nc" id="L826">        } catch (KeeperException.NoNodeException nne) {</span>
+<span class="nc" id="L827">            LOG.error(&quot;lostBookieRecoveryDelay Znode not found. Please verify if Auditor has been initialized.&quot;, nne);</span>
+<span class="nc" id="L828">            return false;</span>
+<span class="nc" id="L829">        } catch (KeeperException ke) {</span>
+<span class="nc" id="L830">            LOG.error(&quot;Error while initializing LostBookieRecoveryDelay&quot;, ke);</span>
+<span class="nc" id="L831">            throw ReplicationException.fromKeeperException(&quot;Error contacting zookeeper&quot;, ke);</span>
+<span class="nc" id="L832">        } catch (InterruptedException ie) {</span>
+<span class="nc" id="L833">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L834">            throw new ReplicationException.UnavailableException(&quot;Interrupted while contacting zookeeper&quot;, ie);</span>
+<span class="nc" id="L835">        }</span>
+<span class="nc" id="L836">        return true;</span>
+    }
+
+    @Override
+    public void setLostBookieRecoveryDelay(int lostBookieRecoveryDelay) throws UnavailableException {
+<span class="nc bnc" id="L841" title="All 2 branches missed.">        if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L842">            LOG.debug(&quot;setLostBookieRecoveryDelay()&quot;);</span>
+        }
+        try {
+<span class="nc bnc" id="L845" title="All 2 branches missed.">            if (zkc.exists(lostBookieRecoveryDelayZnode, false) != null) {</span>
+<span class="nc" id="L846">                zkc.setData(lostBookieRecoveryDelayZnode, Integer.toString(lostBookieRecoveryDelay).getBytes(UTF_8),</span>
+                        -1);
+            } else {
+<span class="nc" id="L849">                zkc.create(lostBookieRecoveryDelayZnode, Integer.toString(lostBookieRecoveryDelay).getBytes(UTF_8),</span>
+                        Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
+            }
+<span class="nc" id="L852">        } catch (KeeperException ke) {</span>
+<span class="nc" id="L853">            LOG.error(&quot;Error while setting LostBookieRecoveryDelay &quot;, ke);</span>
+<span class="nc" id="L854">            throw ReplicationException.fromKeeperException(&quot;Error contacting zookeeper&quot;, ke);</span>
+<span class="nc" id="L855">        } catch (InterruptedException ie) {</span>
+<span class="nc" id="L856">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L857">            throw new ReplicationException.UnavailableException(&quot;Interrupted while contacting zookeeper&quot;, ie);</span>
+<span class="nc" id="L858">        }</span>
+<span class="nc" id="L859">    }</span>
+
+    @Override
+    public int getLostBookieRecoveryDelay() throws UnavailableException {
+<span class="nc bnc" id="L863" title="All 2 branches missed.">        if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L864">            LOG.debug(&quot;getLostBookieRecoveryDelay()&quot;);</span>
+        }
+        try {
+<span class="nc" id="L867">            byte[] data = zkc.getData(lostBookieRecoveryDelayZnode, false, null);</span>
+<span class="nc" id="L868">            return Integer.parseInt(new String(data, UTF_8));</span>
+<span class="nc" id="L869">        } catch (KeeperException ke) {</span>
+<span class="nc" id="L870">            LOG.error(&quot;Error while getting LostBookieRecoveryDelay &quot;, ke);</span>
+<span class="nc" id="L871">            throw ReplicationException.fromKeeperException(&quot;Error contacting zookeeper&quot;, ke);</span>
+<span class="nc" id="L872">        } catch (InterruptedException ie) {</span>
+<span class="nc" id="L873">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L874">            throw new ReplicationException.UnavailableException(&quot;Interrupted while contacting zookeeper&quot;, ie);</span>
+        }
+    }
+
+    @Override
+    public void notifyUnderReplicationLedgerChanged(GenericCallback&lt;Void&gt; cb) throws UnavailableException {
+<span class="nc bnc" id="L880" title="All 2 branches missed.">        if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L881">            LOG.debug(&quot;notifyUnderReplicationLedgerChanged()&quot;);</span>
+        }
+<span class="nc" id="L883">        Watcher w = new Watcher() {</span>
+            @Override
+            public void process(WatchedEvent e) {
+<span class="nc bnc" id="L886" title="All 4 branches missed.">                if (e.getType() == Event.EventType.NodeDeleted &amp;&amp; idExtractionPattern.matcher(e.getPath()).find()) {</span>
+<span class="nc" id="L887">                    cb.operationComplete(0, null);</span>
+                }
+<span class="nc" id="L889">            }</span>
+        };
+        try {
+<span class="nc" id="L892">            zkc.addWatch(urLedgerPath, w, AddWatchMode.PERSISTENT_RECURSIVE);</span>
+<span class="nc" id="L893">        } catch (KeeperException ke) {</span>
+<span class="nc" id="L894">            LOG.error(&quot;Error while checking the state of underReplicated ledgers&quot;, ke);</span>
+<span class="nc" id="L895">            throw ReplicationException.fromKeeperException(&quot;Error contacting zookeeper&quot;, ke);</span>
+<span class="nc" id="L896">        } catch (InterruptedException ie) {</span>
+<span class="nc" id="L897">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L898">            throw new ReplicationException.UnavailableException(&quot;Interrupted while contacting zookeeper&quot;, ie);</span>
+<span class="nc" id="L899">        }</span>
+<span class="nc" id="L900">    }</span>
+
+    @Override
+    public void notifyLostBookieRecoveryDelayChanged(GenericCallback&lt;Void&gt; cb) throws UnavailableException {
+<span class="nc bnc" id="L904" title="All 2 branches missed.">        if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L905">            LOG.debug(&quot;notifyLostBookieRecoveryDelayChanged()&quot;);</span>
+        }
+<span class="nc" id="L907">        Watcher w = new Watcher() {</span>
+            @Override
+            public void process(WatchedEvent e) {
+<span class="nc bnc" id="L910" title="All 2 branches missed.">                if (e.getType() == Watcher.Event.EventType.NodeDataChanged) {</span>
+<span class="nc" id="L911">                    cb.operationComplete(0, null);</span>
+                }
+<span class="nc" id="L913">            }</span>
+        };
+        try {
+<span class="nc bnc" id="L916" title="All 2 branches missed.">            if (null == zkc.exists(lostBookieRecoveryDelayZnode, w)) {</span>
+<span class="nc" id="L917">                cb.operationComplete(0, null);</span>
+<span class="nc" id="L918">                return;</span>
+            }
+<span class="nc" id="L920">        } catch (KeeperException ke) {</span>
+<span class="nc" id="L921">            LOG.error(&quot;Error while checking the state of lostBookieRecoveryDelay&quot;, ke);</span>
+<span class="nc" id="L922">            throw ReplicationException.fromKeeperException(&quot;Error contacting zookeeper&quot;, ke);</span>
+<span class="nc" id="L923">        } catch (InterruptedException ie) {</span>
+<span class="nc" id="L924">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L925">            throw new ReplicationException.UnavailableException(&quot;Interrupted while contacting zookeeper&quot;, ie);</span>
+<span class="nc" id="L926">        }</span>
+<span class="nc" id="L927">    }</span>
+
+    @Override
+    public String getReplicationWorkerIdRereplicatingLedger(long ledgerId)
+            throws ReplicationException.UnavailableException {
+<span class="nc" id="L932">        String replicationWorkerId = null;</span>
+        try {
+<span class="nc" id="L934">            byte[] lockData = zkc.getData(getUrLedgerLockZnode(urLockPath, ledgerId), false, null);</span>
+<span class="nc" id="L935">            LockDataFormat.Builder lockDataBuilder = LockDataFormat.newBuilder();</span>
+<span class="nc" id="L936">            TextFormat.merge(new String(lockData, UTF_8), lockDataBuilder);</span>
+<span class="nc" id="L937">            LockDataFormat lock = lockDataBuilder.build();</span>
+<span class="nc" id="L938">            replicationWorkerId = lock.getBookieId();</span>
+<span class="nc" id="L939">        } catch (KeeperException.NoNodeException e) {</span>
+            // this is ok.
+<span class="nc" id="L941">        } catch (KeeperException e) {</span>
+<span class="nc" id="L942">            LOG.error(&quot;Error while getting ReplicationWorkerId rereplicating Ledger&quot;, e);</span>
+<span class="nc" id="L943">            throw ReplicationException.fromKeeperException(</span>
+                    &quot;Error while getting ReplicationWorkerId rereplicating Ledger&quot;, e);
+<span class="nc" id="L945">        } catch (InterruptedException e) {</span>
+<span class="nc" id="L946">            LOG.error(&quot;Got interrupted while getting ReplicationWorkerId rereplicating Ledger&quot;, e);</span>
+<span class="nc" id="L947">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L948">            throw new ReplicationException.UnavailableException(&quot;Interrupted while contacting zookeeper&quot;, e);</span>
+<span class="nc" id="L949">        } catch (ParseException e) {</span>
+<span class="nc" id="L950">            LOG.error(&quot;Error while parsing ZK data of lock&quot;, e);</span>
+<span class="nc" id="L951">            throw new ReplicationException.UnavailableException(&quot;Error while parsing ZK data of lock&quot;, e);</span>
+<span class="nc" id="L952">        }</span>
+<span class="nc" id="L953">        return replicationWorkerId;</span>
+    }
+
+    @Override
+    public void setCheckAllLedgersCTime(long checkAllLedgersCTime) throws UnavailableException {
+<span class="nc bnc" id="L958" title="All 2 branches missed.">        if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L959">            LOG.debug(&quot;setCheckAllLedgersCTime&quot;);</span>
+        }
+        try {
+<span class="nc" id="L962">            List&lt;ACL&gt; zkAcls = ZkUtils.getACLs(conf);</span>
+<span class="nc" id="L963">            CheckAllLedgersFormat.Builder builder = CheckAllLedgersFormat.newBuilder();</span>
+<span class="nc" id="L964">            builder.setCheckAllLedgersCTime(checkAllLedgersCTime);</span>
+<span class="nc" id="L965">            byte[] checkAllLedgersFormatByteArray = builder.build().toByteArray();</span>
+<span class="nc bnc" id="L966" title="All 2 branches missed.">            if (zkc.exists(checkAllLedgersCtimeZnode, false) != null) {</span>
+<span class="nc" id="L967">                zkc.setData(checkAllLedgersCtimeZnode, checkAllLedgersFormatByteArray, -1);</span>
+            } else {
+<span class="nc" id="L969">                zkc.create(checkAllLedgersCtimeZnode, checkAllLedgersFormatByteArray, zkAcls, CreateMode.PERSISTENT);</span>
+            }
+<span class="nc" id="L971">        } catch (KeeperException ke) {</span>
+<span class="nc" id="L972">            throw ReplicationException.fromKeeperException(&quot;Error contacting zookeeper&quot;, ke);</span>
+<span class="nc" id="L973">        } catch (InterruptedException ie) {</span>
+<span class="nc" id="L974">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L975">            throw new ReplicationException.UnavailableException(&quot;Interrupted while contacting zookeeper&quot;, ie);</span>
+<span class="nc" id="L976">        }</span>
+<span class="nc" id="L977">    }</span>
+
+    @Override
+    public long getCheckAllLedgersCTime() throws UnavailableException {
+<span class="nc bnc" id="L981" title="All 2 branches missed.">        if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L982">            LOG.debug(&quot;setCheckAllLedgersCTime&quot;);</span>
+        }
+        try {
+<span class="nc" id="L985">            byte[] data = zkc.getData(checkAllLedgersCtimeZnode, false, null);</span>
+<span class="nc" id="L986">            CheckAllLedgersFormat checkAllLedgersFormat = CheckAllLedgersFormat.parseFrom(data);</span>
+<span class="nc bnc" id="L987" title="All 2 branches missed.">            return checkAllLedgersFormat.hasCheckAllLedgersCTime() ? checkAllLedgersFormat.getCheckAllLedgersCTime()</span>
+<span class="nc" id="L988">                    : -1;</span>
+<span class="nc" id="L989">        } catch (KeeperException.NoNodeException ne) {</span>
+<span class="nc" id="L990">            LOG.warn(&quot;checkAllLedgersCtimeZnode is not yet available&quot;);</span>
+<span class="nc" id="L991">            return -1;</span>
+<span class="nc" id="L992">        } catch (KeeperException ke) {</span>
+<span class="nc" id="L993">            throw ReplicationException.fromKeeperException(&quot;Error contacting zookeeper&quot;, ke);</span>
+<span class="nc" id="L994">        } catch (InterruptedException ie) {</span>
+<span class="nc" id="L995">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L996">            throw new ReplicationException.UnavailableException(&quot;Interrupted while contacting zookeeper&quot;, ie);</span>
+<span class="nc" id="L997">        } catch (InvalidProtocolBufferException ipbe) {</span>
+<span class="nc" id="L998">            throw new ReplicationException.UnavailableException(&quot;Error while parsing ZK protobuf binary data&quot;, ipbe);</span>
+        }
+    }
+
+    @Override
+    public void setPlacementPolicyCheckCTime(long placementPolicyCheckCTime) throws UnavailableException {
+<span class="nc bnc" id="L1004" title="All 2 branches missed.">        if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L1005">            LOG.debug(&quot;setPlacementPolicyCheckCTime&quot;);</span>
+        }
+        try {
+<span class="nc" id="L1008">            List&lt;ACL&gt; zkAcls = ZkUtils.getACLs(conf);</span>
+<span class="nc" id="L1009">            PlacementPolicyCheckFormat.Builder builder = PlacementPolicyCheckFormat.newBuilder();</span>
+<span class="nc" id="L1010">            builder.setPlacementPolicyCheckCTime(placementPolicyCheckCTime);</span>
+<span class="nc" id="L1011">            byte[] placementPolicyCheckFormatByteArray = builder.build().toByteArray();</span>
+<span class="nc bnc" id="L1012" title="All 2 branches missed.">            if (zkc.exists(placementPolicyCheckCtimeZnode, false) != null) {</span>
+<span class="nc" id="L1013">                zkc.setData(placementPolicyCheckCtimeZnode, placementPolicyCheckFormatByteArray, -1);</span>
+            } else {
+<span class="nc" id="L1015">                zkc.create(placementPolicyCheckCtimeZnode, placementPolicyCheckFormatByteArray, zkAcls,</span>
+                        CreateMode.PERSISTENT);
+            }
+<span class="nc" id="L1018">        } catch (KeeperException ke) {</span>
+<span class="nc" id="L1019">            throw ReplicationException.fromKeeperException(&quot;Error contacting zookeeper&quot;, ke);</span>
+<span class="nc" id="L1020">        } catch (InterruptedException ie) {</span>
+<span class="nc" id="L1021">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L1022">            throw new ReplicationException.UnavailableException(&quot;Interrupted while contacting zookeeper&quot;, ie);</span>
+<span class="nc" id="L1023">        }</span>
+<span class="nc" id="L1024">    }</span>
+
+    @Override
+    public long getPlacementPolicyCheckCTime() throws UnavailableException {
+<span class="nc bnc" id="L1028" title="All 2 branches missed.">        if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L1029">            LOG.debug(&quot;getPlacementPolicyCheckCTime&quot;);</span>
+        }
+        try {
+<span class="nc" id="L1032">            byte[] data = zkc.getData(placementPolicyCheckCtimeZnode, false, null);</span>
+<span class="nc" id="L1033">            PlacementPolicyCheckFormat placementPolicyCheckFormat = PlacementPolicyCheckFormat.parseFrom(data);</span>
+<span class="nc bnc" id="L1034" title="All 2 branches missed.">            return placementPolicyCheckFormat.hasPlacementPolicyCheckCTime()</span>
+<span class="nc" id="L1035">                    ? placementPolicyCheckFormat.getPlacementPolicyCheckCTime() : -1;</span>
+<span class="nc" id="L1036">        } catch (KeeperException.NoNodeException ne) {</span>
+<span class="nc" id="L1037">            LOG.warn(&quot;placementPolicyCheckCtimeZnode is not yet available&quot;);</span>
+<span class="nc" id="L1038">            return -1;</span>
+<span class="nc" id="L1039">        } catch (KeeperException ke) {</span>
+<span class="nc" id="L1040">            throw ReplicationException.fromKeeperException(&quot;Error contacting zookeeper&quot;, ke);</span>
+<span class="nc" id="L1041">        } catch (InterruptedException ie) {</span>
+<span class="nc" id="L1042">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L1043">            throw new ReplicationException.UnavailableException(&quot;Interrupted while contacting zookeeper&quot;, ie);</span>
+<span class="nc" id="L1044">        } catch (InvalidProtocolBufferException ipbe) {</span>
+<span class="nc" id="L1045">            throw new ReplicationException.UnavailableException(&quot;Error while parsing ZK protobuf binary data&quot;, ipbe);</span>
+        }
+    }
+
+    @Override
+    public void setReplicasCheckCTime(long replicasCheckCTime) throws UnavailableException {
+        try {
+<span class="nc" id="L1052">            List&lt;ACL&gt; zkAcls = ZkUtils.getACLs(conf);</span>
+<span class="nc" id="L1053">            ReplicasCheckFormat.Builder builder = ReplicasCheckFormat.newBuilder();</span>
+<span class="nc" id="L1054">            builder.setReplicasCheckCTime(replicasCheckCTime);</span>
+<span class="nc" id="L1055">            byte[] replicasCheckFormatByteArray = builder.build().toByteArray();</span>
+<span class="nc bnc" id="L1056" title="All 2 branches missed.">            if (zkc.exists(replicasCheckCtimeZnode, false) != null) {</span>
+<span class="nc" id="L1057">                zkc.setData(replicasCheckCtimeZnode, replicasCheckFormatByteArray, -1);</span>
+            } else {
+<span class="nc" id="L1059">                zkc.create(replicasCheckCtimeZnode, replicasCheckFormatByteArray, zkAcls, CreateMode.PERSISTENT);</span>
+            }
+<span class="nc bnc" id="L1061" title="All 2 branches missed.">            if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L1062">                LOG.debug(&quot;setReplicasCheckCTime completed successfully&quot;);</span>
+            }
+<span class="nc" id="L1064">        } catch (KeeperException ke) {</span>
+<span class="nc" id="L1065">            throw ReplicationException.fromKeeperException(&quot;Error contacting zookeeper&quot;, ke);</span>
+<span class="nc" id="L1066">        } catch (InterruptedException ie) {</span>
+<span class="nc" id="L1067">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L1068">            throw new ReplicationException.UnavailableException(&quot;Interrupted while contacting zookeeper&quot;, ie);</span>
+<span class="nc" id="L1069">        }</span>
+<span class="nc" id="L1070">    }</span>
+
+    @Override
+    public long getReplicasCheckCTime() throws UnavailableException {
+        try {
+<span class="nc" id="L1075">            byte[] data = zkc.getData(replicasCheckCtimeZnode, false, null);</span>
+<span class="nc" id="L1076">            ReplicasCheckFormat replicasCheckFormat = ReplicasCheckFormat.parseFrom(data);</span>
+<span class="nc bnc" id="L1077" title="All 2 branches missed.">            if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L1078">                LOG.debug(&quot;getReplicasCheckCTime completed successfully&quot;);</span>
+            }
+<span class="nc bnc" id="L1080" title="All 2 branches missed.">            return replicasCheckFormat.hasReplicasCheckCTime() ? replicasCheckFormat.getReplicasCheckCTime() : -1;</span>
+<span class="nc" id="L1081">        } catch (KeeperException.NoNodeException ne) {</span>
+<span class="nc" id="L1082">            LOG.warn(&quot;replicasCheckCtimeZnode is not yet available&quot;);</span>
+<span class="nc" id="L1083">            return -1;</span>
+<span class="nc" id="L1084">        } catch (KeeperException ke) {</span>
+<span class="nc" id="L1085">            throw ReplicationException.fromKeeperException(&quot;Error contacting zookeeper&quot;, ke);</span>
+<span class="nc" id="L1086">        } catch (InterruptedException ie) {</span>
+<span class="nc" id="L1087">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L1088">            throw new ReplicationException.UnavailableException(&quot;Interrupted while contacting zookeeper&quot;, ie);</span>
+<span class="nc" id="L1089">        } catch (InvalidProtocolBufferException ipbe) {</span>
+<span class="nc" id="L1090">            throw new ReplicationException.UnavailableException(&quot;Error while parsing ZK protobuf binary data&quot;, ipbe);</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

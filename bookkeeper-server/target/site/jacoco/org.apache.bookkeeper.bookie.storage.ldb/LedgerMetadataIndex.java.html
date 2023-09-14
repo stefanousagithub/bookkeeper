@@ -1,0 +1,406 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>LedgerMetadataIndex.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache BookKeeper :: Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.bookkeeper.bookie.storage.ldb</a> &gt; <span class="el_source">LedgerMetadataIndex.java</span></div><h1>LedgerMetadataIndex.java</h1><pre class="source lang-java linenums">/*
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * &quot;AS IS&quot; BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ *
+ */
+package org.apache.bookkeeper.bookie.storage.ldb;
+
+import com.google.common.base.Predicate;
+import com.google.common.collect.Iterables;
+import com.google.protobuf.ByteString;
+import io.netty.buffer.ByteBuf;
+import java.io.Closeable;
+import java.io.IOException;
+import java.util.AbstractMap.SimpleEntry;
+import java.util.Arrays;
+import java.util.Map.Entry;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
+import org.apache.bookkeeper.bookie.Bookie;
+import org.apache.bookkeeper.bookie.BookieException;
+import org.apache.bookkeeper.bookie.storage.ldb.DbLedgerStorageDataFormats.LedgerData;
+import org.apache.bookkeeper.bookie.storage.ldb.KeyValueStorage.CloseableIterator;
+import org.apache.bookkeeper.bookie.storage.ldb.KeyValueStorageFactory.DbConfigType;
+import org.apache.bookkeeper.conf.ServerConfiguration;
+import org.apache.bookkeeper.stats.StatsLogger;
+import org.apache.bookkeeper.util.collections.ConcurrentLongHashMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * Maintains an index for the ledgers metadata.
+ *
+ * &lt;p&gt;The key is the ledgerId and the value is the {@link LedgerData} content.
+ */
+public class LedgerMetadataIndex implements Closeable {
+    // Non-ledger data should have negative ID
+    private static final long STORAGE_FLAGS = -0xeefd;
+
+    // Contains all ledgers stored in the bookie
+    private final ConcurrentLongHashMap&lt;LedgerData&gt; ledgers;
+    private final AtomicInteger ledgersCount;
+
+    private final KeyValueStorage ledgersDb;
+    private final LedgerMetadataIndexStats stats;
+
+    // Holds ledger modifications applied in memory map, and pending to be flushed on db
+    private final ConcurrentLinkedQueue&lt;Entry&lt;Long, LedgerData&gt;&gt; pendingLedgersUpdates;
+
+    // Holds ledger ids that were delete from memory map, and pending to be flushed on db
+    private final ConcurrentLinkedQueue&lt;Long&gt; pendingDeletedLedgers;
+<span class="nc" id="L67">    private final ReentrantLock[] locks = new ReentrantLock[16];</span>
+
+    public LedgerMetadataIndex(ServerConfiguration conf, KeyValueStorageFactory storageFactory, String basePath,
+<span class="nc" id="L70">            StatsLogger stats) throws IOException {</span>
+<span class="nc" id="L71">        ledgersDb = storageFactory.newKeyValueStorage(basePath, &quot;ledgers&quot;, DbConfigType.LedgerMetadata, conf);</span>
+
+<span class="nc" id="L73">        ledgers = ConcurrentLongHashMap.&lt;LedgerData&gt;newBuilder().build();</span>
+<span class="nc" id="L74">        ledgersCount = new AtomicInteger();</span>
+
+        // Read all ledgers from db
+<span class="nc" id="L77">        CloseableIterator&lt;Entry&lt;byte[], byte[]&gt;&gt; iterator = ledgersDb.iterator();</span>
+        try {
+<span class="nc bnc" id="L79" title="All 2 branches missed.">            while (iterator.hasNext()) {</span>
+<span class="nc" id="L80">                Entry&lt;byte[], byte[]&gt; entry = iterator.next();</span>
+<span class="nc" id="L81">                long ledgerId = ArrayUtil.getLong(entry.getKey(), 0);</span>
+<span class="nc bnc" id="L82" title="All 2 branches missed.">                if (ledgerId &gt;= 0) {</span>
+<span class="nc" id="L83">                    LedgerData ledgerData = LedgerData.parseFrom(entry.getValue());</span>
+<span class="nc" id="L84">                    ledgers.put(ledgerId, ledgerData);</span>
+<span class="nc" id="L85">                    ledgersCount.incrementAndGet();</span>
+                }
+<span class="nc" id="L87">            }</span>
+        } finally {
+<span class="nc" id="L89">            iterator.close();</span>
+        }
+
+<span class="nc" id="L92">        this.pendingLedgersUpdates = new ConcurrentLinkedQueue&lt;Entry&lt;Long, LedgerData&gt;&gt;();</span>
+<span class="nc" id="L93">        this.pendingDeletedLedgers = new ConcurrentLinkedQueue&lt;Long&gt;();</span>
+
+<span class="nc" id="L95">        this.stats = new LedgerMetadataIndexStats(</span>
+            stats,
+<span class="nc" id="L97">            () -&gt; (long) ledgersCount.get());</span>
+
+<span class="nc bnc" id="L99" title="All 2 branches missed.">        for (int i = 0; i &lt; locks.length; i++) {</span>
+<span class="nc" id="L100">            locks[i] = new ReentrantLock();</span>
+        }
+<span class="nc" id="L102">    }</span>
+
+    @Override
+    public void close() throws IOException {
+<span class="nc" id="L106">        ledgersDb.close();</span>
+<span class="nc" id="L107">    }</span>
+
+    public LedgerData get(long ledgerId) throws IOException {
+<span class="nc" id="L110">        LedgerData ledgerData = ledgers.get(ledgerId);</span>
+<span class="nc bnc" id="L111" title="All 2 branches missed.">        if (ledgerData == null) {</span>
+<span class="nc bnc" id="L112" title="All 2 branches missed.">            if (log.isDebugEnabled()) {</span>
+<span class="nc" id="L113">                log.debug(&quot;Ledger not found {}&quot;, ledgerId);</span>
+            }
+<span class="nc" id="L115">            throw new Bookie.NoLedgerException(ledgerId);</span>
+        }
+
+<span class="nc" id="L118">        return ledgerData;</span>
+    }
+
+    public void set(long ledgerId, LedgerData ledgerData) throws IOException {
+<span class="nc" id="L122">        ledgerData = LedgerData.newBuilder(ledgerData).setExists(true).build();</span>
+
+<span class="nc" id="L124">        ReentrantLock lock = lockForLedger(ledgerId);</span>
+<span class="nc" id="L125">        lock.lock();</span>
+        try {
+<span class="nc bnc" id="L127" title="All 2 branches missed.">            if (ledgers.put(ledgerId, ledgerData) == null) {</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">                if (log.isDebugEnabled()) {</span>
+<span class="nc" id="L129">                    log.debug(&quot;Added new ledger {}&quot;, ledgerId);</span>
+                }
+<span class="nc" id="L131">                ledgersCount.incrementAndGet();</span>
+            }
+
+<span class="nc" id="L134">            pendingLedgersUpdates.add(new SimpleEntry&lt;Long, LedgerData&gt;(ledgerId, ledgerData));</span>
+<span class="nc" id="L135">            pendingDeletedLedgers.remove(ledgerId);</span>
+        } finally {
+<span class="nc" id="L137">            lock.unlock();</span>
+        }
+<span class="nc" id="L139">    }</span>
+
+    public void delete(long ledgerId) throws IOException {
+<span class="nc" id="L142">        ReentrantLock lock = lockForLedger(ledgerId);</span>
+<span class="nc" id="L143">        lock.lock();</span>
+        try {
+<span class="nc bnc" id="L145" title="All 2 branches missed.">            if (ledgers.remove(ledgerId) != null) {</span>
+<span class="nc bnc" id="L146" title="All 2 branches missed.">                if (log.isDebugEnabled()) {</span>
+<span class="nc" id="L147">                    log.debug(&quot;Removed ledger {}&quot;, ledgerId);</span>
+                }
+<span class="nc" id="L149">                ledgersCount.decrementAndGet();</span>
+            }
+
+<span class="nc" id="L152">            pendingDeletedLedgers.add(ledgerId);</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">            pendingLedgersUpdates.removeIf(e -&gt; e.getKey() == ledgerId);</span>
+        } finally {
+<span class="nc" id="L155">            lock.unlock();</span>
+        }
+<span class="nc" id="L157">    }</span>
+
+    public Iterable&lt;Long&gt; getActiveLedgersInRange(final long firstLedgerId, final long lastLedgerId)
+            throws IOException {
+<span class="nc" id="L161">        return Iterables.filter(ledgers.keys(), new Predicate&lt;Long&gt;() {</span>
+            @Override
+            public boolean apply(Long ledgerId) {
+<span class="nc bnc" id="L164" title="All 4 branches missed.">                return ledgerId &gt;= firstLedgerId &amp;&amp; ledgerId &lt; lastLedgerId;</span>
+            }
+        });
+    }
+
+    public boolean setFenced(long ledgerId) throws IOException {
+<span class="nc" id="L170">        ReentrantLock lock = lockForLedger(ledgerId);</span>
+<span class="nc" id="L171">        lock.lock();</span>
+        try {
+<span class="nc" id="L173">            LedgerData ledgerData = get(ledgerId);</span>
+<span class="nc bnc" id="L174" title="All 2 branches missed.">            if (ledgerData.getFenced()) {</span>
+<span class="nc" id="L175">                return false;</span>
+            }
+
+<span class="nc" id="L178">            LedgerData newLedgerData = LedgerData.newBuilder(ledgerData).setFenced(true).build();</span>
+
+<span class="nc bnc" id="L180" title="All 2 branches missed.">            if (ledgers.put(ledgerId, newLedgerData) == null) {</span>
+                // Ledger had been deleted
+<span class="nc bnc" id="L182" title="All 2 branches missed.">                if (log.isDebugEnabled()) {</span>
+<span class="nc" id="L183">                    log.debug(&quot;Re-inserted fenced ledger {}&quot;, ledgerId);</span>
+                }
+<span class="nc" id="L185">                ledgersCount.incrementAndGet();</span>
+<span class="nc bnc" id="L186" title="All 2 branches missed.">            } else if (log.isDebugEnabled()) {</span>
+<span class="nc" id="L187">                log.debug(&quot;Set fenced ledger {}&quot;, ledgerId);</span>
+            }
+
+<span class="nc" id="L190">            pendingLedgersUpdates.add(new SimpleEntry&lt;Long, LedgerData&gt;(ledgerId, newLedgerData));</span>
+<span class="nc" id="L191">            pendingDeletedLedgers.remove(ledgerId);</span>
+<span class="nc" id="L192">            return true;</span>
+        } finally {
+<span class="nc" id="L194">            lock.unlock();</span>
+        }
+    }
+
+    public boolean setLimbo(long ledgerId) throws IOException {
+<span class="nc" id="L199">        ReentrantLock lock = lockForLedger(ledgerId);</span>
+<span class="nc" id="L200">        lock.lock();</span>
+        try {
+<span class="nc" id="L202">            LedgerData ledgerData = get(ledgerId);</span>
+<span class="nc bnc" id="L203" title="All 2 branches missed.">            if (ledgerData.getLimbo()) {</span>
+<span class="nc" id="L204">                return false;</span>
+            }
+
+<span class="nc" id="L207">            LedgerData newLedgerData = LedgerData.newBuilder(ledgerData).setLimbo(true).build();</span>
+
+<span class="nc bnc" id="L209" title="All 2 branches missed.">            if (ledgers.put(ledgerId, newLedgerData) == null) {</span>
+                // Ledger had been deleted
+<span class="nc bnc" id="L211" title="All 2 branches missed.">                if (log.isDebugEnabled()) {</span>
+<span class="nc" id="L212">                    log.debug(&quot;Re-inserted limbo ledger {}&quot;, ledgerId);</span>
+                }
+<span class="nc" id="L214">                ledgersCount.incrementAndGet();</span>
+<span class="nc bnc" id="L215" title="All 2 branches missed.">            } else if (log.isDebugEnabled()) {</span>
+<span class="nc" id="L216">                log.debug(&quot;Set limbo ledger {}&quot;, ledgerId);</span>
+            }
+
+<span class="nc" id="L219">            pendingLedgersUpdates.add(new SimpleEntry&lt;Long, LedgerData&gt;(ledgerId, newLedgerData));</span>
+<span class="nc" id="L220">            pendingDeletedLedgers.remove(ledgerId);</span>
+<span class="nc" id="L221">            return true;</span>
+        } finally {
+<span class="nc" id="L223">            lock.unlock();</span>
+        }
+    }
+
+    public boolean clearLimbo(long ledgerId) throws IOException {
+<span class="nc" id="L228">        ReentrantLock lock = lockForLedger(ledgerId);</span>
+<span class="nc" id="L229">        lock.lock();</span>
+        try {
+<span class="nc" id="L231">            LedgerData ledgerData = get(ledgerId);</span>
+<span class="nc bnc" id="L232" title="All 2 branches missed.">            if (ledgerData == null) {</span>
+<span class="nc" id="L233">                throw new Bookie.NoLedgerException(ledgerId);</span>
+            }
+<span class="nc" id="L235">            final boolean oldValue = ledgerData.getLimbo();</span>
+<span class="nc" id="L236">            LedgerData newLedgerData = LedgerData.newBuilder(ledgerData).setLimbo(false).build();</span>
+
+<span class="nc bnc" id="L238" title="All 2 branches missed.">            if (ledgers.put(ledgerId, newLedgerData) == null) {</span>
+                // Ledger had been deleted
+<span class="nc bnc" id="L240" title="All 2 branches missed.">                if (log.isDebugEnabled()) {</span>
+<span class="nc" id="L241">                    log.debug(&quot;Re-inserted limbo ledger {}&quot;, ledgerId);</span>
+                }
+<span class="nc" id="L243">                ledgersCount.incrementAndGet();</span>
+<span class="nc bnc" id="L244" title="All 2 branches missed.">            } else if (log.isDebugEnabled()) {</span>
+<span class="nc" id="L245">                log.debug(&quot;Set limbo ledger {}&quot;, ledgerId);</span>
+            }
+
+<span class="nc" id="L248">            pendingLedgersUpdates.add(new SimpleEntry&lt;Long, LedgerData&gt;(ledgerId, newLedgerData));</span>
+<span class="nc" id="L249">            pendingDeletedLedgers.remove(ledgerId);</span>
+<span class="nc" id="L250">            return oldValue;</span>
+        } finally {
+<span class="nc" id="L252">            lock.unlock();</span>
+        }
+    }
+
+
+    public void setMasterKey(long ledgerId, byte[] masterKey) throws IOException {
+<span class="nc" id="L258">        ReentrantLock lock = lockForLedger(ledgerId);</span>
+<span class="nc" id="L259">        lock.lock();</span>
+        try {
+<span class="nc" id="L261">            LedgerData ledgerData = ledgers.get(ledgerId);</span>
+<span class="nc bnc" id="L262" title="All 2 branches missed.">            if (ledgerData == null) {</span>
+                // New ledger inserted
+<span class="nc" id="L264">                ledgerData = LedgerData.newBuilder().setExists(true).setFenced(false)</span>
+<span class="nc" id="L265">                    .setMasterKey(ByteString.copyFrom(masterKey)).build();</span>
+<span class="nc bnc" id="L266" title="All 2 branches missed.">                if (log.isDebugEnabled()) {</span>
+<span class="nc" id="L267">                    log.debug(&quot;Inserting new ledger {}&quot;, ledgerId);</span>
+                }
+            } else {
+<span class="nc" id="L270">                byte[] storedMasterKey = ledgerData.getMasterKey().toByteArray();</span>
+<span class="nc bnc" id="L271" title="All 2 branches missed.">                if (ArrayUtil.isArrayAllZeros(storedMasterKey)) {</span>
+                    // update master key of the ledger
+<span class="nc" id="L273">                    ledgerData = LedgerData.newBuilder(ledgerData).setMasterKey(ByteString.copyFrom(masterKey)).build();</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">                    if (log.isDebugEnabled()) {</span>
+<span class="nc" id="L275">                        log.debug(&quot;Replace old master key {} with new master key {}&quot;, storedMasterKey, masterKey);</span>
+                    }
+<span class="nc bnc" id="L277" title="All 4 branches missed.">                } else if (!Arrays.equals(storedMasterKey, masterKey) &amp;&amp; !ArrayUtil.isArrayAllZeros(masterKey)) {</span>
+<span class="nc" id="L278">                    log.warn(&quot;Ledger {} masterKey in db can only be set once.&quot;, ledgerId);</span>
+<span class="nc" id="L279">                    throw new IOException(BookieException.create(BookieException.Code.IllegalOpException));</span>
+                }
+            }
+
+<span class="nc bnc" id="L283" title="All 2 branches missed.">            if (ledgers.put(ledgerId, ledgerData) == null) {</span>
+<span class="nc" id="L284">                ledgersCount.incrementAndGet();</span>
+            }
+
+<span class="nc" id="L287">            pendingLedgersUpdates.add(new SimpleEntry&lt;Long, LedgerData&gt;(ledgerId, ledgerData));</span>
+<span class="nc" id="L288">            pendingDeletedLedgers.remove(ledgerId);</span>
+        } finally {
+<span class="nc" id="L290">            lock.unlock();</span>
+        }
+<span class="nc" id="L292">    }</span>
+
+    /**
+     * Flushes all pending changes.
+     */
+    public void flush() throws IOException {
+<span class="nc" id="L298">        LongWrapper key = LongWrapper.get();</span>
+
+<span class="nc" id="L300">        int updatedLedgers = 0;</span>
+<span class="nc bnc" id="L301" title="All 2 branches missed.">        while (!pendingLedgersUpdates.isEmpty()) {</span>
+<span class="nc" id="L302">            Entry&lt;Long, LedgerData&gt; entry = pendingLedgersUpdates.poll();</span>
+<span class="nc" id="L303">            key.set(entry.getKey());</span>
+<span class="nc" id="L304">            byte[] value = entry.getValue().toByteArray();</span>
+<span class="nc" id="L305">            ledgersDb.put(key.array, value);</span>
+<span class="nc" id="L306">            ++updatedLedgers;</span>
+<span class="nc" id="L307">        }</span>
+
+<span class="nc bnc" id="L309" title="All 2 branches missed.">        if (log.isDebugEnabled()) {</span>
+<span class="nc" id="L310">            log.debug(&quot;Persisting updates to {} ledgers&quot;, updatedLedgers);</span>
+        }
+
+<span class="nc" id="L313">        ledgersDb.sync();</span>
+<span class="nc" id="L314">        key.recycle();</span>
+<span class="nc" id="L315">    }</span>
+
+    public void removeDeletedLedgers() throws IOException {
+<span class="nc" id="L318">        LongWrapper key = LongWrapper.get();</span>
+
+<span class="nc" id="L320">        int deletedLedgers = 0;</span>
+<span class="nc bnc" id="L321" title="All 2 branches missed.">        while (!pendingDeletedLedgers.isEmpty()) {</span>
+<span class="nc" id="L322">            long ledgerId = pendingDeletedLedgers.poll();</span>
+<span class="nc" id="L323">            key.set(ledgerId);</span>
+<span class="nc" id="L324">            ledgersDb.delete(key.array);</span>
+<span class="nc" id="L325">        }</span>
+
+<span class="nc bnc" id="L327" title="All 2 branches missed.">        if (log.isDebugEnabled()) {</span>
+<span class="nc" id="L328">            log.debug(&quot;Persisting deletes of ledgers {}&quot;, deletedLedgers);</span>
+        }
+
+<span class="nc" id="L331">        ledgersDb.sync();</span>
+<span class="nc" id="L332">        key.recycle();</span>
+<span class="nc" id="L333">    }</span>
+
+    private ReentrantLock lockForLedger(long ledgerId) {
+<span class="nc" id="L336">        return locks[Math.abs((int) ledgerId) % locks.length];</span>
+    }
+
+    int getStorageStateFlags() throws IOException {
+<span class="nc" id="L340">        LongWrapper keyWrapper = LongWrapper.get();</span>
+<span class="nc" id="L341">        LongWrapper currentWrapper = LongWrapper.get();</span>
+
+        try {
+<span class="nc" id="L344">            keyWrapper.set(STORAGE_FLAGS);</span>
+<span class="nc" id="L345">            synchronized (ledgersDb) {</span>
+<span class="nc" id="L346">                int current = 0;</span>
+<span class="nc bnc" id="L347" title="All 2 branches missed.">                if (ledgersDb.get(keyWrapper.array, currentWrapper.array) &gt;= 0) {</span>
+<span class="nc" id="L348">                    current = (int) currentWrapper.getValue();</span>
+                }
+<span class="nc" id="L350">                return current;</span>
+            }
+        } finally {
+<span class="nc" id="L353">            keyWrapper.recycle();</span>
+<span class="nc" id="L354">            currentWrapper.recycle();</span>
+        }
+    }
+
+    boolean setStorageStateFlags(int expected, int newFlags) throws IOException {
+<span class="nc" id="L359">        LongWrapper keyWrapper = LongWrapper.get();</span>
+<span class="nc" id="L360">        LongWrapper currentWrapper = LongWrapper.get();</span>
+<span class="nc" id="L361">        LongWrapper newFlagsWrapper = LongWrapper.get();</span>
+
+        try {
+<span class="nc" id="L364">            keyWrapper.set(STORAGE_FLAGS);</span>
+<span class="nc" id="L365">            newFlagsWrapper.set(newFlags);</span>
+<span class="nc" id="L366">            synchronized (ledgersDb) {</span>
+<span class="nc" id="L367">                int current = 0;</span>
+<span class="nc bnc" id="L368" title="All 2 branches missed.">                if (ledgersDb.get(keyWrapper.array, currentWrapper.array) &gt;= 0) {</span>
+<span class="nc" id="L369">                    current = (int) currentWrapper.getValue();</span>
+                }
+<span class="nc bnc" id="L371" title="All 2 branches missed.">                if (current == expected) {</span>
+<span class="nc" id="L372">                    ledgersDb.put(keyWrapper.array, newFlagsWrapper.array);</span>
+<span class="nc" id="L373">                    ledgersDb.sync();</span>
+<span class="nc" id="L374">                    return true;</span>
+                }
+<span class="nc" id="L376">            }</span>
+        } finally {
+<span class="nc" id="L378">            keyWrapper.recycle();</span>
+<span class="nc" id="L379">            currentWrapper.recycle();</span>
+<span class="nc" id="L380">            newFlagsWrapper.recycle();</span>
+        }
+<span class="nc" id="L382">        return false;</span>
+    }
+
+<span class="nc" id="L385">    private static final Logger log = LoggerFactory.getLogger(LedgerMetadataIndex.class);</span>
+
+    void setExplicitLac(long ledgerId, ByteBuf lac) throws IOException {
+<span class="nc" id="L388">        LedgerData ledgerData = ledgers.get(ledgerId);</span>
+<span class="nc bnc" id="L389" title="All 2 branches missed.">        if (ledgerData != null) {</span>
+<span class="nc" id="L390">            LedgerData newLedgerData = LedgerData.newBuilder(ledgerData)</span>
+<span class="nc" id="L391">                    .setExplicitLac(ByteString.copyFrom(lac.nioBuffer())).build();</span>
+
+<span class="nc bnc" id="L393" title="All 2 branches missed.">            if (ledgers.put(ledgerId, newLedgerData) == null) {</span>
+                // Ledger had been deleted
+<span class="nc" id="L395">                return;</span>
+<span class="nc bnc" id="L396" title="All 2 branches missed.">            } else if (log.isDebugEnabled()) {</span>
+<span class="nc" id="L397">                log.debug(&quot;Set explicitLac on ledger {}&quot;, ledgerId);</span>
+            }
+<span class="nc" id="L399">            pendingLedgersUpdates.add(new SimpleEntry&lt;Long, LedgerData&gt;(ledgerId, newLedgerData));</span>
+        } else {
+            // unknown ledger here
+        }
+<span class="nc" id="L403">    }</span>
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

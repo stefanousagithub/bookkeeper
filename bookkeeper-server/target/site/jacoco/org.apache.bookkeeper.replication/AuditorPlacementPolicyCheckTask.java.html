@@ -1,0 +1,322 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AuditorPlacementPolicyCheckTask.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache BookKeeper :: Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.bookkeeper.replication</a> &gt; <span class="el_source">AuditorPlacementPolicyCheckTask.java</span></div><h1>AuditorPlacementPolicyCheckTask.java</h1><pre class="source lang-java linenums">/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.apache.bookkeeper.replication;
+
+import com.google.common.base.Stopwatch;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
+import lombok.Getter;
+import org.apache.bookkeeper.client.BKException;
+import org.apache.bookkeeper.client.BookKeeperAdmin;
+import org.apache.bookkeeper.client.EnsemblePlacementPolicy;
+import org.apache.bookkeeper.client.api.LedgerMetadata;
+import org.apache.bookkeeper.conf.ServerConfiguration;
+import org.apache.bookkeeper.meta.LedgerManager;
+import org.apache.bookkeeper.meta.LedgerUnderreplicationManager;
+import org.apache.bookkeeper.meta.UnderreplicatedLedger;
+import org.apache.bookkeeper.net.BookieId;
+import org.apache.bookkeeper.proto.BookkeeperInternalCallbacks;
+import org.apache.bookkeeper.versioning.Versioned;
+import org.apache.zookeeper.AsyncCallback;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+@Getter
+public class AuditorPlacementPolicyCheckTask extends AuditorTask {
+<span class="nc" id="L49">    private static final Logger LOG = LoggerFactory.getLogger(AuditorPlacementPolicyCheckTask.class);</span>
+
+<span class="nc" id="L51">    private final long underreplicatedLedgerRecoveryGracePeriod;</span>
+
+<span class="nc" id="L53">    private final AtomicInteger numOfLedgersFoundNotAdheringInPlacementPolicyCheck;</span>
+<span class="nc" id="L54">    private final AtomicInteger numOfLedgersFoundSoftlyAdheringInPlacementPolicyCheck;</span>
+<span class="nc" id="L55">    private final AtomicInteger numOfClosedLedgersAuditedInPlacementPolicyCheck;</span>
+<span class="nc" id="L56">    private final AtomicInteger numOfURLedgersElapsedRecoveryGracePeriod;</span>
+
+    AuditorPlacementPolicyCheckTask(ServerConfiguration conf,
+                                    AuditorStats auditorStats,
+                                    BookKeeperAdmin admin,
+                                    LedgerManager ledgerManager,
+                                    LedgerUnderreplicationManager ledgerUnderreplicationManager,
+                                    ShutdownTaskHandler shutdownTaskHandler,
+                                    BiConsumer&lt;AtomicBoolean, Throwable&gt; hasAuditCheckTask) {
+<span class="nc" id="L65">        super(conf, auditorStats, admin, ledgerManager,</span>
+                ledgerUnderreplicationManager, shutdownTaskHandler, hasAuditCheckTask);
+<span class="nc" id="L67">        this.underreplicatedLedgerRecoveryGracePeriod = conf.getUnderreplicatedLedgerRecoveryGracePeriod();</span>
+<span class="nc" id="L68">        this.numOfLedgersFoundNotAdheringInPlacementPolicyCheck = new AtomicInteger(0);</span>
+<span class="nc" id="L69">        this.numOfLedgersFoundSoftlyAdheringInPlacementPolicyCheck = new AtomicInteger(0);</span>
+<span class="nc" id="L70">        this.numOfClosedLedgersAuditedInPlacementPolicyCheck = new AtomicInteger(0);</span>
+<span class="nc" id="L71">        this.numOfURLedgersElapsedRecoveryGracePeriod = new AtomicInteger(0);</span>
+<span class="nc" id="L72">    }</span>
+
+    @Override
+    protected void runTask() {
+<span class="nc bnc" id="L76" title="All 2 branches missed.">        if (hasBookieCheckTask()) {</span>
+<span class="nc" id="L77">            LOG.info(&quot;Audit bookie task already scheduled; skipping periodic placement policy check task&quot;);</span>
+<span class="nc" id="L78">            return;</span>
+        }
+
+        try {
+<span class="nc bnc" id="L82" title="All 2 branches missed.">            if (!isLedgerReplicationEnabled()) {</span>
+<span class="nc" id="L83">                LOG.info(&quot;Ledger replication disabled, skipping placementPolicyCheck&quot;);</span>
+<span class="nc" id="L84">                return;</span>
+            }
+
+<span class="nc" id="L87">            Stopwatch stopwatch = Stopwatch.createStarted();</span>
+<span class="nc" id="L88">            LOG.info(&quot;Starting PlacementPolicyCheck&quot;);</span>
+<span class="nc" id="L89">            placementPolicyCheck();</span>
+<span class="nc" id="L90">            long placementPolicyCheckDuration = stopwatch.stop().elapsed(TimeUnit.MILLISECONDS);</span>
+<span class="nc" id="L91">            int numOfLedgersFoundNotAdheringInPlacementPolicyCheckValue =</span>
+<span class="nc" id="L92">                    numOfLedgersFoundNotAdheringInPlacementPolicyCheck.get();</span>
+<span class="nc" id="L93">            int numOfLedgersFoundSoftlyAdheringInPlacementPolicyCheckValue =</span>
+<span class="nc" id="L94">                    numOfLedgersFoundSoftlyAdheringInPlacementPolicyCheck.get();</span>
+<span class="nc" id="L95">            int numOfClosedLedgersAuditedInPlacementPolicyCheckValue =</span>
+<span class="nc" id="L96">                    numOfClosedLedgersAuditedInPlacementPolicyCheck.get();</span>
+<span class="nc" id="L97">            int numOfURLedgersElapsedRecoveryGracePeriodValue =</span>
+<span class="nc" id="L98">                    numOfURLedgersElapsedRecoveryGracePeriod.get();</span>
+<span class="nc" id="L99">            LOG.info(</span>
+                    &quot;Completed placementPolicyCheck in {} milliSeconds.&quot;
+                            + &quot; numOfClosedLedgersAuditedInPlacementPolicyCheck {}&quot;
+                            + &quot; numOfLedgersNotAdheringToPlacementPolicy {}&quot;
+                            + &quot; numOfLedgersSoftlyAdheringToPlacementPolicy {}&quot;
+                            + &quot; numOfURLedgersElapsedRecoveryGracePeriod {}&quot;,
+<span class="nc" id="L105">                    placementPolicyCheckDuration, numOfClosedLedgersAuditedInPlacementPolicyCheckValue,</span>
+<span class="nc" id="L106">                    numOfLedgersFoundNotAdheringInPlacementPolicyCheckValue,</span>
+<span class="nc" id="L107">                    numOfLedgersFoundSoftlyAdheringInPlacementPolicyCheckValue,</span>
+<span class="nc" id="L108">                    numOfURLedgersElapsedRecoveryGracePeriodValue);</span>
+<span class="nc" id="L109">            auditorStats.getLedgersNotAdheringToPlacementPolicyGuageValue()</span>
+<span class="nc" id="L110">                    .set(numOfLedgersFoundNotAdheringInPlacementPolicyCheckValue);</span>
+<span class="nc" id="L111">            auditorStats.getLedgersSoftlyAdheringToPlacementPolicyGuageValue()</span>
+<span class="nc" id="L112">                    .set(numOfLedgersFoundSoftlyAdheringInPlacementPolicyCheckValue);</span>
+<span class="nc" id="L113">            auditorStats.getNumOfURLedgersElapsedRecoveryGracePeriodGuageValue()</span>
+<span class="nc" id="L114">                    .set(numOfURLedgersElapsedRecoveryGracePeriodValue);</span>
+<span class="nc" id="L115">            auditorStats.getPlacementPolicyCheckTime().registerSuccessfulEvent(placementPolicyCheckDuration,</span>
+                    TimeUnit.MILLISECONDS);
+<span class="nc" id="L117">        } catch (ReplicationException.BKAuditException e) {</span>
+<span class="nc" id="L118">            int numOfLedgersFoundInPlacementPolicyCheckValue =</span>
+<span class="nc" id="L119">                    numOfLedgersFoundNotAdheringInPlacementPolicyCheck.get();</span>
+<span class="nc bnc" id="L120" title="All 2 branches missed.">            if (numOfLedgersFoundInPlacementPolicyCheckValue &gt; 0) {</span>
+                /*
+                 * Though there is BKAuditException while doing
+                 * placementPolicyCheck, it found few ledgers not
+                 * adhering to placement policy. So reporting it.
+                 */
+<span class="nc" id="L126">                auditorStats.getLedgersNotAdheringToPlacementPolicyGuageValue()</span>
+<span class="nc" id="L127">                        .set(numOfLedgersFoundInPlacementPolicyCheckValue);</span>
+            }
+
+<span class="nc" id="L130">            int numOfLedgersFoundSoftlyAdheringInPlacementPolicyCheckValue =</span>
+<span class="nc" id="L131">                    numOfLedgersFoundSoftlyAdheringInPlacementPolicyCheck.get();</span>
+<span class="nc bnc" id="L132" title="All 2 branches missed.">            if (numOfLedgersFoundSoftlyAdheringInPlacementPolicyCheckValue &gt; 0) {</span>
+                /*
+                 * Though there is BKAuditException while doing
+                 * placementPolicyCheck, it found few ledgers softly
+                 * adhering to placement policy. So reporting it.
+                 */
+<span class="nc" id="L138">                auditorStats.getLedgersSoftlyAdheringToPlacementPolicyGuageValue()</span>
+<span class="nc" id="L139">                        .set(numOfLedgersFoundSoftlyAdheringInPlacementPolicyCheckValue);</span>
+            }
+
+<span class="nc" id="L142">            int numOfURLedgersElapsedRecoveryGracePeriodValue =</span>
+<span class="nc" id="L143">                    numOfURLedgersElapsedRecoveryGracePeriod.get();</span>
+<span class="nc bnc" id="L144" title="All 2 branches missed.">            if (numOfURLedgersElapsedRecoveryGracePeriodValue &gt; 0) {</span>
+                /*
+                 * Though there is BKAuditException while doing
+                 * placementPolicyCheck, it found few urledgers have
+                 * elapsed recovery graceperiod. So reporting it.
+                 */
+<span class="nc" id="L150">                auditorStats.getNumOfURLedgersElapsedRecoveryGracePeriodGuageValue()</span>
+<span class="nc" id="L151">                        .set(numOfURLedgersElapsedRecoveryGracePeriodValue);</span>
+            }
+
+<span class="nc" id="L154">            LOG.error(</span>
+                    &quot;BKAuditException running periodic placementPolicy check.&quot;
+                            + &quot;numOfLedgersNotAdheringToPlacementPolicy {}, &quot;
+                            + &quot;numOfLedgersSoftlyAdheringToPlacementPolicy {},&quot;
+                            + &quot;numOfURLedgersElapsedRecoveryGracePeriod {}&quot;,
+<span class="nc" id="L159">                    numOfLedgersFoundInPlacementPolicyCheckValue,</span>
+<span class="nc" id="L160">                    numOfLedgersFoundSoftlyAdheringInPlacementPolicyCheckValue,</span>
+<span class="nc" id="L161">                    numOfURLedgersElapsedRecoveryGracePeriodValue, e);</span>
+<span class="nc" id="L162">        } catch (ReplicationException.UnavailableException ue) {</span>
+<span class="nc" id="L163">            LOG.error(&quot;Underreplication manager unavailable running periodic check&quot;, ue);</span>
+<span class="nc" id="L164">        }</span>
+<span class="nc" id="L165">    }</span>
+
+    @Override
+    public void shutdown() {
+
+<span class="nc" id="L170">    }</span>
+
+    void placementPolicyCheck() throws ReplicationException.BKAuditException {
+<span class="nc" id="L173">        final CountDownLatch placementPolicyCheckLatch = new CountDownLatch(1);</span>
+<span class="nc" id="L174">        numOfLedgersFoundNotAdheringInPlacementPolicyCheck.set(0);</span>
+<span class="nc" id="L175">        numOfLedgersFoundSoftlyAdheringInPlacementPolicyCheck.set(0);</span>
+<span class="nc" id="L176">        numOfClosedLedgersAuditedInPlacementPolicyCheck.set(0);</span>
+<span class="nc" id="L177">        numOfURLedgersElapsedRecoveryGracePeriod.set(0);</span>
+<span class="nc bnc" id="L178" title="All 2 branches missed.">        if (this.underreplicatedLedgerRecoveryGracePeriod &gt; 0) {</span>
+<span class="nc" id="L179">            Iterator&lt;UnderreplicatedLedger&gt; underreplicatedLedgersInfo = ledgerUnderreplicationManager</span>
+<span class="nc" id="L180">                    .listLedgersToRereplicate(null);</span>
+<span class="nc" id="L181">            List&lt;Long&gt; urLedgersElapsedRecoveryGracePeriod = new ArrayList&lt;Long&gt;();</span>
+<span class="nc bnc" id="L182" title="All 2 branches missed.">            while (underreplicatedLedgersInfo.hasNext()) {</span>
+<span class="nc" id="L183">                UnderreplicatedLedger underreplicatedLedger = underreplicatedLedgersInfo.next();</span>
+<span class="nc" id="L184">                long underreplicatedLedgerMarkTimeInMilSecs = underreplicatedLedger.getCtime();</span>
+<span class="nc bnc" id="L185" title="All 2 branches missed.">                if (underreplicatedLedgerMarkTimeInMilSecs != UnderreplicatedLedger.UNASSIGNED_CTIME) {</span>
+                    long elapsedTimeInSecs =
+<span class="nc" id="L187">                            (System.currentTimeMillis() - underreplicatedLedgerMarkTimeInMilSecs) / 1000;</span>
+<span class="nc bnc" id="L188" title="All 2 branches missed.">                    if (elapsedTimeInSecs &gt; this.underreplicatedLedgerRecoveryGracePeriod) {</span>
+<span class="nc" id="L189">                        urLedgersElapsedRecoveryGracePeriod.add(underreplicatedLedger.getLedgerId());</span>
+<span class="nc" id="L190">                        numOfURLedgersElapsedRecoveryGracePeriod.incrementAndGet();</span>
+                    }
+                }
+<span class="nc" id="L193">            }</span>
+<span class="nc bnc" id="L194" title="All 2 branches missed.">            if (urLedgersElapsedRecoveryGracePeriod.isEmpty()) {</span>
+<span class="nc" id="L195">                LOG.info(&quot;No Underreplicated ledger has elapsed recovery graceperiod: {}&quot;,</span>
+                        urLedgersElapsedRecoveryGracePeriod);
+            } else {
+<span class="nc" id="L198">                LOG.error(&quot;Following Underreplicated ledgers have elapsed recovery graceperiod: {}&quot;,</span>
+                        urLedgersElapsedRecoveryGracePeriod);
+            }
+        }
+<span class="nc" id="L202">        BookkeeperInternalCallbacks.Processor&lt;Long&gt; ledgerProcessor =</span>
+<span class="nc" id="L203">                new BookkeeperInternalCallbacks.Processor&lt;Long&gt;() {</span>
+                    @Override
+                    public void process(Long ledgerId, AsyncCallback.VoidCallback iterCallback) {
+<span class="nc" id="L206">                        ledgerManager.readLedgerMetadata(ledgerId).whenComplete((metadataVer, exception) -&gt; {</span>
+<span class="nc bnc" id="L207" title="All 2 branches missed.">                            if (exception == null) {</span>
+<span class="nc" id="L208">                                doPlacementPolicyCheck(ledgerId, iterCallback, metadataVer);</span>
+<span class="nc bnc" id="L209" title="All 2 branches missed.">                            } else if (BKException.getExceptionCode(exception)</span>
+                                    == BKException.Code.NoSuchLedgerExistsOnMetadataServerException) {
+<span class="nc bnc" id="L211" title="All 2 branches missed.">                                if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L212">                                    LOG.debug(&quot;Ignoring replication of already deleted ledger {}&quot;,</span>
+                                            ledgerId);
+                                }
+<span class="nc" id="L215">                                iterCallback.processResult(BKException.Code.OK, null, null);</span>
+                            } else {
+<span class="nc" id="L217">                                LOG.warn(&quot;Unable to read the ledger: {} information&quot;, ledgerId);</span>
+<span class="nc" id="L218">                                iterCallback.processResult(BKException.getExceptionCode(exception), null, null);</span>
+                            }
+<span class="nc" id="L220">                        });</span>
+<span class="nc" id="L221">                    }</span>
+                };
+        // Reading the result after processing all the ledgers
+<span class="nc" id="L224">        final List&lt;Integer&gt; resultCode = new ArrayList&lt;Integer&gt;(1);</span>
+<span class="nc" id="L225">        ledgerManager.asyncProcessLedgers(ledgerProcessor, new AsyncCallback.VoidCallback() {</span>
+
+            @Override
+            public void processResult(int rc, String s, Object obj) {
+<span class="nc" id="L229">                resultCode.add(rc);</span>
+<span class="nc" id="L230">                placementPolicyCheckLatch.countDown();</span>
+<span class="nc" id="L231">            }</span>
+        }, null, BKException.Code.OK, BKException.Code.ReadException);
+        try {
+<span class="nc" id="L234">            placementPolicyCheckLatch.await();</span>
+<span class="nc" id="L235">        } catch (InterruptedException e) {</span>
+<span class="nc" id="L236">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L237">            throw new ReplicationException.BKAuditException(&quot;Exception while doing placementPolicy check&quot;, e);</span>
+<span class="nc" id="L238">        }</span>
+<span class="nc bnc" id="L239" title="All 2 branches missed.">        if (!resultCode.contains(BKException.Code.OK)) {</span>
+<span class="nc" id="L240">            throw new ReplicationException.BKAuditException(&quot;Exception while doing placementPolicy check&quot;,</span>
+<span class="nc" id="L241">                    BKException.create(resultCode.get(0)));</span>
+        }
+        try {
+<span class="nc" id="L244">            ledgerUnderreplicationManager.setPlacementPolicyCheckCTime(System.currentTimeMillis());</span>
+<span class="nc" id="L245">        } catch (ReplicationException.NonRecoverableReplicationException nre) {</span>
+<span class="nc" id="L246">            LOG.error(&quot;Non Recoverable Exception while reading from ZK&quot;, nre);</span>
+<span class="nc" id="L247">            submitShutdownTask();</span>
+<span class="nc" id="L248">        } catch (ReplicationException.UnavailableException ue) {</span>
+<span class="nc" id="L249">            LOG.error(&quot;Got exception while trying to set PlacementPolicyCheckCTime&quot;, ue);</span>
+<span class="nc" id="L250">        }</span>
+<span class="nc" id="L251">    }</span>
+
+    void doPlacementPolicyCheck(Long ledgerId,
+                                AsyncCallback.VoidCallback iterCallback,
+                                Versioned&lt;LedgerMetadata&gt; metadataVer) {
+<span class="nc" id="L256">        LedgerMetadata metadata = metadataVer.getValue();</span>
+<span class="nc" id="L257">        int writeQuorumSize = metadata.getWriteQuorumSize();</span>
+<span class="nc" id="L258">        int ackQuorumSize = metadata.getAckQuorumSize();</span>
+<span class="nc bnc" id="L259" title="All 2 branches missed.">        if (metadata.isClosed()) {</span>
+<span class="nc" id="L260">            boolean foundSegmentNotAdheringToPlacementPolicy = false;</span>
+<span class="nc" id="L261">            boolean foundSegmentSoftlyAdheringToPlacementPolicy = false;</span>
+<span class="nc bnc" id="L262" title="All 2 branches missed.">            for (Map.Entry&lt;Long, ? extends List&lt;BookieId&gt;&gt; ensemble : metadata</span>
+<span class="nc" id="L263">                    .getAllEnsembles().entrySet()) {</span>
+<span class="nc" id="L264">                long startEntryIdOfSegment = ensemble.getKey();</span>
+<span class="nc" id="L265">                List&lt;BookieId&gt; ensembleOfSegment = ensemble.getValue();</span>
+<span class="nc" id="L266">                EnsemblePlacementPolicy.PlacementPolicyAdherence segmentAdheringToPlacementPolicy = admin</span>
+<span class="nc" id="L267">                        .isEnsembleAdheringToPlacementPolicy(ensembleOfSegment, writeQuorumSize,</span>
+                                ackQuorumSize);
+<span class="nc bnc" id="L269" title="All 2 branches missed.">                if (segmentAdheringToPlacementPolicy == EnsemblePlacementPolicy.PlacementPolicyAdherence.FAIL) {</span>
+<span class="nc" id="L270">                    foundSegmentNotAdheringToPlacementPolicy = true;</span>
+<span class="nc" id="L271">                    LOG.warn(</span>
+                            &quot;For ledger: {}, Segment starting at entry: {}, with ensemble: {} having &quot;
+                                    + &quot;writeQuorumSize: {} and ackQuorumSize: {} is not adhering to &quot;
+                                    + &quot;EnsemblePlacementPolicy&quot;,
+<span class="nc" id="L275">                            ledgerId, startEntryIdOfSegment, ensembleOfSegment, writeQuorumSize,</span>
+<span class="nc" id="L276">                            ackQuorumSize);</span>
+<span class="nc bnc" id="L277" title="All 2 branches missed.">                } else if (segmentAdheringToPlacementPolicy</span>
+                        == EnsemblePlacementPolicy.PlacementPolicyAdherence.MEETS_SOFT) {
+<span class="nc" id="L279">                    foundSegmentSoftlyAdheringToPlacementPolicy = true;</span>
+<span class="nc bnc" id="L280" title="All 2 branches missed.">                    if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L281">                        LOG.debug(</span>
+                                &quot;For ledger: {}, Segment starting at entry: {}, with ensemble: {}&quot;
+                                        + &quot; having writeQuorumSize: {} and ackQuorumSize: {} is&quot;
+                                        + &quot; softly adhering to EnsemblePlacementPolicy&quot;,
+<span class="nc" id="L285">                                ledgerId, startEntryIdOfSegment, ensembleOfSegment, writeQuorumSize,</span>
+<span class="nc" id="L286">                                ackQuorumSize);</span>
+                    }
+                }
+<span class="nc" id="L289">            }</span>
+<span class="nc bnc" id="L290" title="All 2 branches missed.">            if (foundSegmentNotAdheringToPlacementPolicy) {</span>
+<span class="nc" id="L291">                numOfLedgersFoundNotAdheringInPlacementPolicyCheck.incrementAndGet();</span>
+                //If user enable repaired, mark this ledger to under replication manager.
+<span class="nc bnc" id="L293" title="All 2 branches missed.">                if (conf.isRepairedPlacementPolicyNotAdheringBookieEnable()) {</span>
+<span class="nc" id="L294">                    ledgerUnderreplicationManager.markLedgerUnderreplicatedAsync(ledgerId,</span>
+<span class="nc" id="L295">                            Collections.emptyList()).whenComplete((res, e) -&gt; {</span>
+<span class="nc bnc" id="L296" title="All 2 branches missed.">                        if (e != null) {</span>
+<span class="nc" id="L297">                            LOG.error(&quot;For ledger: {}, the placement policy not adhering bookie &quot;</span>
+                                            + &quot;storage, mark it to under replication manager failed.&quot;,
+                                    ledgerId, e);
+<span class="nc" id="L300">                            return;</span>
+                        }
+<span class="nc bnc" id="L302" title="All 2 branches missed.">                        if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L303">                            LOG.debug(&quot;For ledger: {}, the placement policy not adhering bookie&quot;</span>
+                                    + &quot; storage, mark it to under replication manager&quot;, ledgerId);
+                        }
+<span class="nc" id="L306">                    });</span>
+                }
+<span class="nc bnc" id="L308" title="All 2 branches missed.">            } else if (foundSegmentSoftlyAdheringToPlacementPolicy) {</span>
+<span class="nc" id="L309">                numOfLedgersFoundSoftlyAdheringInPlacementPolicyCheck</span>
+<span class="nc" id="L310">                        .incrementAndGet();</span>
+            }
+<span class="nc" id="L312">            numOfClosedLedgersAuditedInPlacementPolicyCheck.incrementAndGet();</span>
+<span class="nc" id="L313">        } else {</span>
+<span class="nc bnc" id="L314" title="All 2 branches missed.">            if (LOG.isDebugEnabled()) {</span>
+<span class="nc" id="L315">                LOG.debug(&quot;Ledger: {} is not yet closed, so skipping the placementPolicy&quot;</span>
+                        + &quot;check analysis for now&quot;, ledgerId);
+            }
+        }
+<span class="nc" id="L319">        iterCallback.processResult(BKException.Code.OK, null, null);</span>
+<span class="nc" id="L320">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

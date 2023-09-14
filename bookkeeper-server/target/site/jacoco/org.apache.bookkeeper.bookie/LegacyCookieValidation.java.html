@@ -1,0 +1,276 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>LegacyCookieValidation.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">Apache BookKeeper :: Server</a> &gt; <a href="index.source.html" class="el_package">org.apache.bookkeeper.bookie</a> &gt; <span class="el_source">LegacyCookieValidation.java</span></div><h1>LegacyCookieValidation.java</h1><pre class="source lang-java linenums">/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * &quot;License&quot;); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.apache.bookkeeper.bookie;
+
+import com.google.common.collect.Lists;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.net.UnknownHostException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
+import org.apache.bookkeeper.conf.ServerConfiguration;
+import org.apache.bookkeeper.discover.RegistrationManager;
+import org.apache.bookkeeper.net.BookieId;
+import org.apache.bookkeeper.versioning.Version;
+import org.apache.bookkeeper.versioning.Versioned;
+import org.apache.commons.lang3.tuple.Pair;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * Legacy implementation of CookieValidation.
+ */
+public class LegacyCookieValidation implements CookieValidation {
+<span class="nc" id="L43">    private static final Logger log = LoggerFactory.getLogger(LegacyCookieValidation.class);</span>
+
+    private final ServerConfiguration conf;
+    private final RegistrationManager registrationManager;
+
+    public LegacyCookieValidation(ServerConfiguration conf,
+<span class="nc" id="L49">                                  RegistrationManager registrationManager) {</span>
+<span class="nc" id="L50">        this.conf = conf;</span>
+<span class="nc" id="L51">        this.registrationManager = registrationManager;</span>
+<span class="nc" id="L52">    }</span>
+
+    @Override
+    public void checkCookies(List&lt;File&gt; directories) throws BookieException {
+        try {
+            // 1. retrieve the instance id
+<span class="nc" id="L58">            String instanceId = registrationManager.getClusterInstanceId();</span>
+
+            // 2. build the master cookie from the configuration
+<span class="nc" id="L61">            Cookie.Builder builder = Cookie.generateCookie(conf);</span>
+<span class="nc bnc" id="L62" title="All 2 branches missed.">            if (null != instanceId) {</span>
+<span class="nc" id="L63">                builder.setInstanceId(instanceId);</span>
+            }
+<span class="nc" id="L65">            Cookie masterCookie = builder.build();</span>
+<span class="nc" id="L66">            boolean allowExpansion = conf.getAllowStorageExpansion();</span>
+
+            // 3. read the cookie from registration manager. it is the `source-of-truth` of a given bookie.
+            //    if it doesn't exist in registration manager, this bookie is a new bookie, otherwise it is
+            //    an old bookie.
+<span class="nc" id="L71">            List&lt;BookieId&gt; possibleBookieIds = possibleBookieIds(conf);</span>
+<span class="nc" id="L72">            final Versioned&lt;Cookie&gt; rmCookie = readAndVerifyCookieFromRegistrationManager(</span>
+                    masterCookie, registrationManager, possibleBookieIds, allowExpansion);
+
+            // 4. check if the cookie appear in all the directories.
+<span class="nc" id="L76">            List&lt;File&gt; missedCookieDirs = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L77">            List&lt;Cookie&gt; existingCookies = Lists.newArrayList();</span>
+<span class="nc bnc" id="L78" title="All 2 branches missed.">            if (null != rmCookie) {</span>
+<span class="nc" id="L79">                existingCookies.add(rmCookie.getValue());</span>
+            }
+
+            // 4.1 verify the cookies in journal directories
+<span class="nc" id="L83">            Pair&lt;List&lt;File&gt;, List&lt;Cookie&gt;&gt; result =</span>
+<span class="nc" id="L84">                    verifyAndGetMissingDirs(masterCookie,</span>
+                            allowExpansion, directories);
+<span class="nc" id="L86">            missedCookieDirs.addAll(result.getLeft());</span>
+<span class="nc" id="L87">            existingCookies.addAll(result.getRight());</span>
+
+            // 5. if there are directories missing cookies,
+            //    this is either a:
+            //    - new environment
+            //    - a directory is being added
+            //    - a directory has been corrupted/wiped, which is an error
+<span class="nc bnc" id="L94" title="All 2 branches missed.">            if (!missedCookieDirs.isEmpty()) {</span>
+<span class="nc bnc" id="L95" title="All 2 branches missed.">                if (rmCookie == null) {</span>
+                    // 5.1 new environment: all directories should be empty
+<span class="nc" id="L97">                    verifyDirsForNewEnvironment(missedCookieDirs);</span>
+<span class="nc" id="L98">                    stampNewCookie(conf, masterCookie, registrationManager,</span>
+                            Version.NEW, directories);
+<span class="nc bnc" id="L100" title="All 2 branches missed.">                } else if (allowExpansion) {</span>
+                    // 5.2 storage is expanding
+<span class="nc" id="L102">                    Set&lt;File&gt; knownDirs = getKnownDirs(existingCookies);</span>
+<span class="nc" id="L103">                    verifyDirsForStorageExpansion(missedCookieDirs, knownDirs);</span>
+<span class="nc" id="L104">                    stampNewCookie(conf, masterCookie, registrationManager,</span>
+<span class="nc" id="L105">                            rmCookie.getVersion(), directories);</span>
+<span class="nc" id="L106">                } else {</span>
+                    // 5.3 Cookie-less directories and
+                    //     we can't do anything with them
+<span class="nc" id="L109">                    log.error(&quot;There are directories without a cookie,&quot;</span>
+                            + &quot; and this is neither a new environment,&quot;
+                            + &quot; nor is storage expansion enabled. &quot;
+                            + &quot;Empty directories are {}&quot;, missedCookieDirs);
+<span class="nc" id="L113">                    throw new BookieException.InvalidCookieException();</span>
+                }
+            } else {
+<span class="nc bnc" id="L116" title="All 2 branches missed.">                if (rmCookie == null) {</span>
+                    // No corresponding cookie found in registration manager. The bookie should fail to come up.
+<span class="nc" id="L118">                    log.error(&quot;Cookie for this bookie is not stored in metadata store. Bookie failing to come up&quot;);</span>
+<span class="nc" id="L119">                    throw new BookieException.InvalidCookieException();</span>
+                }
+            }
+<span class="nc" id="L122">        } catch (IOException ioe) {</span>
+<span class="nc" id="L123">            log.error(&quot;Error accessing cookie on disks&quot;, ioe);</span>
+<span class="nc" id="L124">            throw new BookieException.InvalidCookieException(ioe);</span>
+<span class="nc" id="L125">        }</span>
+<span class="nc" id="L126">    }</span>
+
+    private static List&lt;BookieId&gt; possibleBookieIds(ServerConfiguration conf)
+            throws BookieException {
+        // we need to loop through all possible bookie identifiers to ensure it is treated as a new environment
+        // just because of bad configuration
+<span class="nc" id="L132">        List&lt;BookieId&gt; addresses = Lists.newArrayListWithExpectedSize(3);</span>
+        // we are checking all possibilities here, so we don't need to fail if we can only get
+        // loopback address. it will fail anyway when the bookie attempts to listen on loopback address.
+        try {
+<span class="nc bnc" id="L136" title="All 2 branches missed.">            if (null != conf.getBookieId()) {</span>
+                // If BookieID is configured, it takes precedence over default network information used as id.
+<span class="nc" id="L138">                addresses.add(BookieImpl.getBookieId(conf));</span>
+            } else {
+                // ip address
+<span class="nc" id="L141">                addresses.add(BookieImpl.getBookieAddress(</span>
+                        new ServerConfiguration(conf)
+<span class="nc" id="L143">                                .setUseHostNameAsBookieID(false)</span>
+<span class="nc" id="L144">                                .setAdvertisedAddress(null)</span>
+<span class="nc" id="L145">                                .setAllowLoopback(true)</span>
+<span class="nc" id="L146">                ).toBookieId());</span>
+                // host name
+<span class="nc" id="L148">                addresses.add(BookieImpl.getBookieAddress(</span>
+                        new ServerConfiguration(conf)
+<span class="nc" id="L150">                                .setUseHostNameAsBookieID(true)</span>
+<span class="nc" id="L151">                                .setAdvertisedAddress(null)</span>
+<span class="nc" id="L152">                                .setAllowLoopback(true)</span>
+<span class="nc" id="L153">                ).toBookieId());</span>
+                // advertised address
+<span class="nc bnc" id="L155" title="All 2 branches missed.">                if (null != conf.getAdvertisedAddress()) {</span>
+<span class="nc" id="L156">                    addresses.add(BookieImpl.getBookieAddress(conf).toBookieId());</span>
+                }
+            }
+<span class="nc" id="L159">        } catch (UnknownHostException e) {</span>
+<span class="nc" id="L160">            throw new BookieException.UnknownBookieIdException(e);</span>
+<span class="nc" id="L161">        }</span>
+<span class="nc" id="L162">        return addresses;</span>
+    }
+
+    private static Versioned&lt;Cookie&gt; readAndVerifyCookieFromRegistrationManager(
+            Cookie masterCookie, RegistrationManager rm,
+            List&lt;BookieId&gt; addresses, boolean allowExpansion)
+            throws BookieException {
+<span class="nc" id="L169">        Versioned&lt;Cookie&gt; rmCookie = null;</span>
+<span class="nc bnc" id="L170" title="All 2 branches missed.">        for (BookieId address : addresses) {</span>
+            try {
+<span class="nc" id="L172">                rmCookie = Cookie.readFromRegistrationManager(rm, address);</span>
+                // If allowStorageExpansion option is set, we should
+                // make sure that the new set of ledger/index dirs
+                // is a super set of the old; else, we fail the cookie check
+<span class="nc bnc" id="L176" title="All 2 branches missed.">                if (allowExpansion) {</span>
+<span class="nc" id="L177">                    masterCookie.verifyIsSuperSet(rmCookie.getValue());</span>
+                } else {
+<span class="nc" id="L179">                    masterCookie.verify(rmCookie.getValue());</span>
+                }
+<span class="nc" id="L181">            } catch (BookieException.CookieNotFoundException e) {</span>
+<span class="nc" id="L182">                continue;</span>
+<span class="nc" id="L183">            }</span>
+<span class="nc" id="L184">        }</span>
+<span class="nc" id="L185">        return rmCookie;</span>
+    }
+
+    private static Pair&lt;List&lt;File&gt;, List&lt;Cookie&gt;&gt; verifyAndGetMissingDirs(
+            Cookie masterCookie, boolean allowExpansion, List&lt;File&gt; dirs)
+            throws BookieException.InvalidCookieException, IOException {
+<span class="nc" id="L191">        List&lt;File&gt; missingDirs = Lists.newArrayList();</span>
+<span class="nc" id="L192">        List&lt;Cookie&gt; existedCookies = Lists.newArrayList();</span>
+<span class="nc bnc" id="L193" title="All 2 branches missed.">        for (File dir : dirs) {</span>
+            try {
+<span class="nc" id="L195">                Cookie c = Cookie.readFromDirectory(dir);</span>
+<span class="nc bnc" id="L196" title="All 2 branches missed.">                if (allowExpansion) {</span>
+<span class="nc" id="L197">                    masterCookie.verifyIsSuperSet(c);</span>
+                } else {
+<span class="nc" id="L199">                    masterCookie.verify(c);</span>
+                }
+<span class="nc" id="L201">                existedCookies.add(c);</span>
+<span class="nc" id="L202">            } catch (FileNotFoundException fnf) {</span>
+<span class="nc" id="L203">                missingDirs.add(dir);</span>
+<span class="nc" id="L204">            }</span>
+<span class="nc" id="L205">        }</span>
+<span class="nc" id="L206">        return Pair.of(missingDirs, existedCookies);</span>
+    }
+
+    private static void verifyDirsForNewEnvironment(List&lt;File&gt; missedCookieDirs)
+            throws BookieException.InvalidCookieException {
+<span class="nc" id="L211">        List&lt;File&gt; nonEmptyDirs = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L212" title="All 2 branches missed.">        for (File dir : missedCookieDirs) {</span>
+<span class="nc" id="L213">            String[] content = dir.list();</span>
+<span class="nc bnc" id="L214" title="All 4 branches missed.">            if (content != null &amp;&amp; content.length != 0) {</span>
+<span class="nc" id="L215">                nonEmptyDirs.add(dir);</span>
+            }
+<span class="nc" id="L217">        }</span>
+<span class="nc bnc" id="L218" title="All 2 branches missed.">        if (!nonEmptyDirs.isEmpty()) {</span>
+<span class="nc" id="L219">            log.error(&quot;Not all the new directories are empty. New directories that are not empty are: &quot; + nonEmptyDirs);</span>
+<span class="nc" id="L220">            throw new BookieException.InvalidCookieException();</span>
+        }
+<span class="nc" id="L222">    }</span>
+
+    private static void stampNewCookie(ServerConfiguration conf,
+                                       Cookie masterCookie,
+                                       RegistrationManager rm,
+                                       Version version,
+                                       List&lt;File&gt; dirs)
+            throws BookieException, IOException {
+        // backfill all the directories that miss cookies (for storage expansion)
+<span class="nc" id="L231">        log.info(&quot;Stamping new cookies on all dirs {}&quot;, dirs);</span>
+<span class="nc bnc" id="L232" title="All 2 branches missed.">        for (File dir : dirs) {</span>
+<span class="nc" id="L233">            masterCookie.writeToDirectory(dir);</span>
+<span class="nc" id="L234">        }</span>
+<span class="nc" id="L235">        masterCookie.writeToRegistrationManager(rm, conf, version);</span>
+<span class="nc" id="L236">    }</span>
+
+    private static Set&lt;File&gt; getKnownDirs(List&lt;Cookie&gt; cookies) {
+<span class="nc" id="L239">        return cookies.stream()</span>
+<span class="nc" id="L240">                .flatMap((c) -&gt; {</span>
+<span class="nc" id="L241">                    List&lt;String&gt; dirs = new ArrayList&lt;&gt;(Arrays.asList(c.getLedgerDirPathsFromCookie()));</span>
+<span class="nc bnc" id="L242" title="All 2 branches missed.">                    if (null != c.getIndexDirPathsFromCookie()) {</span>
+<span class="nc" id="L243">                        dirs.addAll(Arrays.asList(c.getIndexDirPathsFromCookie()));</span>
+                    }
+<span class="nc" id="L245">                    return Arrays.stream(dirs.toArray(new String[]{}));</span>
+<span class="nc" id="L246">                }).map((s) -&gt; new File(s)).collect(Collectors.toSet());</span>
+    }
+
+    private static void verifyDirsForStorageExpansion(
+            List&lt;File&gt; missedCookieDirs,
+            Set&lt;File&gt; existingLedgerDirs) throws BookieException.InvalidCookieException {
+
+<span class="nc" id="L253">        List&lt;File&gt; dirsMissingData = new ArrayList&lt;File&gt;();</span>
+<span class="nc" id="L254">        List&lt;File&gt; nonEmptyDirs = new ArrayList&lt;File&gt;();</span>
+<span class="nc bnc" id="L255" title="All 2 branches missed.">        for (File dir : missedCookieDirs) {</span>
+<span class="nc bnc" id="L256" title="All 2 branches missed.">            if (existingLedgerDirs.contains(dir.getParentFile())) {</span>
+                // if one of the existing ledger dirs doesn't have cookie,
+                // let us not proceed further
+<span class="nc" id="L259">                dirsMissingData.add(dir);</span>
+<span class="nc" id="L260">                continue;</span>
+            }
+<span class="nc" id="L262">            String[] content = dir.list();</span>
+<span class="nc bnc" id="L263" title="All 4 branches missed.">            if (content != null &amp;&amp; content.length != 0) {</span>
+<span class="nc" id="L264">                nonEmptyDirs.add(dir);</span>
+            }
+<span class="nc" id="L266">        }</span>
+<span class="nc bnc" id="L267" title="All 4 branches missed.">        if (dirsMissingData.size() &gt; 0 || nonEmptyDirs.size() &gt; 0) {</span>
+<span class="nc" id="L268">            log.error(&quot;Either not all local directories have cookies or directories being added &quot;</span>
+                    + &quot; newly are not empty. &quot;
+                    + &quot;Directories missing cookie file are: &quot; + dirsMissingData
+                    + &quot; New directories that are not empty are: &quot; + nonEmptyDirs);
+<span class="nc" id="L272">            throw new BookieException.InvalidCookieException();</span>
+        }
+<span class="nc" id="L274">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.10.202304240956</span></div></body></html>

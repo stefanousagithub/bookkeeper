@@ -911,7 +911,7 @@
     <plugins>
 
       <!-- Stefano Costanzo -->
-<!--      <plugin>
+    <plugin>
         <groupId>org.jacoco</groupId>
         <artifactId>jacoco-maven-plugin</artifactId>
         <version>${jacoco-maven-plugin.version}</version>
@@ -923,13 +923,13 @@
           </execution>
 	      <execution>
             <id>report</id>
-            <phase>prepare-package</phase>
+            <phase>test</phase>
             <goals>
               <goal>report</goal>
             </goals>  
           </execution>
         </executions>
-      </plugin> -->
+      </plugin> 
 
       <plugin>
         <groupId>com.github.spotbugs</groupId>
