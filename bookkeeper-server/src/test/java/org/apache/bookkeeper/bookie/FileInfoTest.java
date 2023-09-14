@@ -108,6 +108,7 @@ public class FileInfoTest {
 	        	{ ByteBuffer.wrap("abcde".getBytes()), null, 0, true, "NullPointerException" },
 	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 4, false, "Short read" },
 	        	{ null, ByteBuffer.allocate(5), 0, true, "0" },
+	        	{ ByteBuffer.allocate(10000), ByteBuffer.allocate(10000), 0, true, "10000" },
 	        });
 	    }
 		
