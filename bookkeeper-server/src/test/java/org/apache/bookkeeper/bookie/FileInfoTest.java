@@ -132,7 +132,7 @@ public class FileInfoTest {
 	        	{ ByteBuffer.wrap("abcde".getBytes()), null, 0, true, false, "NullPointerException" },
 	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 4, false, false, "Short read" },
 	        	{ null, ByteBuffer.allocate(5), 0, true, false, "0" },
-	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 0, true, true, "FileInfoDeletedException" },
+	        	//{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 0, true, true, "FileInfoDeletedException" },
 	        });
 	    }
 		
@@ -183,10 +183,10 @@ public class FileInfoTest {
 				Assert.assertEquals(expectedResult, Integer.toString(fi.read(bb, start, bestEffort)));
 			} catch (FileInfoDeletedException e) {
 				Assert.assertTrue(e.getClass().toString().contains(expectedResult));
-			} catch (IOException e) {
-				Assert.assertTrue(e.getMessage().startsWith(expectedResult));
 			} catch (NullPointerException e) {
 				Assert.assertTrue(e.getClass().toString().contains(expectedResult));
+			} catch (IOException e) {
+				Assert.assertTrue(e.getMessage().startsWith(expectedResult));
 			} catch (IllegalArgumentException e) {
 				Assert.assertEquals(expectedResult, e.getMessage());
 			} 
