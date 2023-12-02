@@ -326,9 +326,11 @@
             <configuration>
               <targetClasses>
                 <param>org.apache.bookkeeper.bookie.FileInfo</param>
+                <param>org.apache.bookkeeper.bookie.BufferedChannel</param>
               </targetClasses>
               <targetTests>
                 <param>org.apache.bookkeeper.bookie.FileInfoTest</param>
+                <param>org.apache.bookkeeper.bookie.BufferedChannelTest</param>
               </targetTests>
               <avoidCallsTo>
                 <avoidCallsTo>org.slf4j</avoidCallsTo>
