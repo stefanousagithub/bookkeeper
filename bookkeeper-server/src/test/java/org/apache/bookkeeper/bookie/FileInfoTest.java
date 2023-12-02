@@ -181,8 +181,8 @@ public class FileInfoTest {
 		public void readAbsoluteTest() {
 			try {
 				Assert.assertEquals(expectedResult, Integer.toString(fi.read(bb, start, bestEffort)));
-			} catch (FileInfoDeletedException e) {
-				Assert.assertTrue(e.getClass().toString().contains(expectedResult));
+//			} catch (FileInfoDeletedException e) {
+//				Assert.assertTrue(e.getClass().toString().contains(expectedResult));
 			} catch (NullPointerException e) {
 				Assert.assertTrue(e.getClass().toString().contains(expectedResult));
 			} catch (IOException e) {
