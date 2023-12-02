@@ -95,7 +95,6 @@ public class FileInfoTest {
 				spyFi.moveToNewLocation(newFile, size);
 				if("true" == String.valueOf(spyFi.isSameFile(newFile)) && Long.toString(spyFi.size()).equals(expectedResult)) flag = true;
 				if(expectedResult.equals("false")) flag = true;
-				if()
 				Assert.assertTrue(flag);
 			} catch (IOException e) {
 				Assert.assertTrue(e.getClass().toString().contains(expectedResult));
