@@ -153,7 +153,8 @@ public class FileInfoTest {
 			
 			try {
 				fi = new FileInfo(new File("/tmp/file"), masterKey, 1);
-				
+				fi.checkOpen(true);
+
 				if (content != null) {
 					ByteBuffer[] array = new ByteBuffer[1];
 					array[0] = content;
