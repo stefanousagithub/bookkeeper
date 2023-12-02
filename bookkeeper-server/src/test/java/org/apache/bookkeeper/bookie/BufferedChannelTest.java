@@ -70,6 +70,8 @@ public class BufferedChannelTest {
 	            { 20, 10, 9},
 	            { 20, 10, 10},
 	            { 20, 10, 11},
+	            
+	            { 10, 0, 1}, // Added for Ba-dua analysis
 	        });
 	    }
 		
