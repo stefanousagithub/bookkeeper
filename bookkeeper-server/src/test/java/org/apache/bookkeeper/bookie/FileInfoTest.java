@@ -7,6 +7,7 @@ import java.nio.channels.FileChannel;
 import java.util.Arrays;
 import java.util.Collection;
 
+import org.apache.bookkeeper.bookie.FileInfo.FileInfoDeletedException;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Test;
@@ -43,7 +44,7 @@ public class FileInfoTest {
 	        	{File.createTempFile("origin","file"), 11, 0, "10" },					// 4
 	        	{File.createTempFile("origin","file"), Integer.MAX_VALUE, 0, "10" },	// 5
 	        	// {null, 10, 0, null},													// Error if new file is null
-	        	{new File("/tmp/file"), 10, 0, "false" },							// 6
+	        	{new File("/tmp/file"), 10, 0, "false" },								// 6
 	        	{File.createTempFile("origin","file"), 10, 1, "IOException" },			// 7: Mocking delete method
 	        });
 	    }
@@ -123,19 +124,20 @@ public class FileInfoTest {
 		@Parameters
 		public static Collection<Object[]> data() {
 	        return Arrays.asList(new Object[][] {
-	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), -1, true, "5" },
-	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 0, true, "5" },
-	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 4, true, "1" },
-	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 5, true, "0" },
-	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(0), 0, true, "0" },
-	        	{ ByteBuffer.wrap("abcde".getBytes()), null, 0, true, "NullPointerException" },
-	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 4, false, "Short read" },
-	        	{ null, ByteBuffer.allocate(5), 0, true, "0" },
+	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), -1, true, false, "5" },
+	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 0, true, false, "5" },
+	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 4, true, false, "1" },
+	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 5, true, false, "0" },
+	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(0), 0, true, false, "0" },
+	        	{ ByteBuffer.wrap("abcde".getBytes()), null, 0, true, false, "NullPointerException" },
+	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 4, false, false, "Short read" },
+	        	{ null, ByteBuffer.allocate(5), 0, true, false, "0" },
+	        	//{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 0, true, true, "FileInfoDeletedException" },
 	        });
 	    }
 		
-		public ReadAbsoluteTest(ByteBuffer content, ByteBuffer bb, long start, boolean bestEffort, String expectedResult) {
-			configure(content, bb, start, bestEffort, expectedResult);
+		public ReadAbsoluteTest(ByteBuffer content, ByteBuffer bb, long start, boolean bestEffort, boolean deleted, String expectedResult) {
+			configure(content, bb, start, bestEffort, deleted, expectedResult);
 		}
 		
 		@After
@@ -148,12 +150,13 @@ public class FileInfoTest {
 			}
 		}
 		
-		public void configure(ByteBuffer content, ByteBuffer bb, long start, boolean bestEffort, String expectedResult) {
+		public void configure(ByteBuffer content, ByteBuffer bb, long start, boolean bestEffort, boolean deleted, String expectedResult) {
 			byte[] masterKey = {'a', 'b', 'c'};
 			
 			try {
 				fi = new FileInfo(new File("/tmp/file"), masterKey, 1);
-				
+				fi.checkOpen(true);
+
 				if (content != null) {
 					ByteBuffer[] array = new ByteBuffer[1];
 					array[0] = content;
@@ -168,16 +171,22 @@ public class FileInfoTest {
 			this.start = start;
 			this.bestEffort = bestEffort;
 			this.expectedResult = expectedResult;
+			
+			if(deleted) {
+				fi.delete();
+			}
 		}
 		
 		@Test
 		public void readAbsoluteTest() {
 			try {
 				Assert.assertEquals(expectedResult, Integer.toString(fi.read(bb, start, bestEffort)));
-			} catch (IOException e) {
-				Assert.assertTrue(e.getMessage().startsWith(expectedResult));
+			} catch (FileInfoDeletedException e) {
+				Assert.assertTrue(e.getClass().toString().contains(expectedResult));
 			} catch (NullPointerException e) {
 				Assert.assertTrue(e.getClass().toString().contains(expectedResult));
+			} catch (IOException e) {
+				Assert.assertTrue(e.getMessage().startsWith(expectedResult));
 			} catch (IllegalArgumentException e) {
 				Assert.assertEquals(expectedResult, e.getMessage());
 			} 
