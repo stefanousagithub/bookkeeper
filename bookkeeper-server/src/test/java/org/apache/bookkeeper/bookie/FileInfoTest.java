@@ -132,7 +132,7 @@ public class FileInfoTest {
 	        	{ ByteBuffer.wrap("abcde".getBytes()), null, 0, true, false, "NullPointerException" },
 	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 4, false, false, "Short read" },
 	        	{ null, ByteBuffer.allocate(5), 0, true, false, "0" },
-	        	//{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 0, true, true, "FileInfoDeletedException" },
+	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 0, true, true, "FileInfoDeletedException" },
 	        });
 	    }
 		
@@ -155,7 +155,7 @@ public class FileInfoTest {
 			
 			try {
 				fi = new FileInfo(new File("/tmp/file"), masterKey, 1);
-				fi.checkOpen(true);
+				//fi.checkOpen(true);
 
 				if (content != null) {
 					ByteBuffer[] array = new ByteBuffer[1];
