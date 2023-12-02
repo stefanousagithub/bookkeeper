@@ -43,7 +43,7 @@ public class FileInfoTest {
 	        	{File.createTempFile("origin","file"), 11, 0, "10" },					// 4
 	        	{File.createTempFile("origin","file"), Integer.MAX_VALUE, 0, "10" },	// 5
 	        	// {null, 10, 0, null},													// Error if new file is null
-	        	{new File("/tmp/file"), 10, 0, "false" },							// 6
+	        	{new File("/tmp/file"), 10, 0, "false" },								// 6
 	        	{File.createTempFile("origin","file"), 10, 1, "IOException" },			// 7: Mocking delete method
 	        });
 	    }
@@ -95,6 +95,7 @@ public class FileInfoTest {
 				spyFi.moveToNewLocation(newFile, size);
 				if("true" == String.valueOf(spyFi.isSameFile(newFile)) && Long.toString(spyFi.size()).equals(expectedResult)) flag = true;
 				if(expectedResult.equals("false")) flag = true;
+				if()
 				Assert.assertTrue(flag);
 			} catch (IOException e) {
 				Assert.assertTrue(e.getClass().toString().contains(expectedResult));
@@ -126,7 +127,7 @@ public class FileInfoTest {
 	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), -1, true, "5" },
 	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 0, true, "5" },
 	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 4, true, "1" },
-	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(2), 5, true, "0" },
+	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 5, true, "0" },
 	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(0), 0, true, "0" },
 	        	{ ByteBuffer.wrap("abcde".getBytes()), null, 0, true, "NullPointerException" },
 	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 4, false, "Short read" },

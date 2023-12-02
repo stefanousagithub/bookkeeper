@@ -83,6 +83,7 @@ public class BufferedChannelTest {
 			this.writeCapacity = capacity;
 			this.len = len;
 			this.unpersistedBytesBound = unpersistedBytesBound;
+			
 			// Define src ByteBuff
 			if(len < 0) {
 				this.src = null;
@@ -162,6 +163,7 @@ public class BufferedChannelTest {
 	        fc.read(buff);
 	        bytesFC = buff.array();
 	        bytesTemp = Arrays.copyOfRange(randomArray, 0, lenFC);
+	        Assert.assertEquals(Arrays.toString(bytesTemp),Arrays.toString(bytesFC));
 	        System.out.println("temp: " +  Arrays.toString(bytesTemp) + ", fc: " + Arrays.toString(bytesFC));
 	        System.out.println("");
 		}
