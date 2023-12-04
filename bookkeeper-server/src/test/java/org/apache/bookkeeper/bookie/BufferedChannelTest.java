@@ -199,7 +199,7 @@ public class BufferedChannelTest {
 	            {5, 5, 5, 5, "Read past EOF"},		// 6
 	            {5, 4, 0, 5, "Read past EOF"},		// 7
 	            {5, 0, 0, 5, "Read past EOF"},		// 8
-	            {5, -1, 0, 5, "is null"},	// 9 NullPointerException: dest is null
+	            // {5, -1, 0, 5, "\"dest\" is null"},	// 9 NullPointerException: dest is null
 	            {0, 5, 0, 5, "Read past EOF"},	   	// 10
 	            {-1, 5, 0, 5, "Read past EOF"},		// 11
 	            
