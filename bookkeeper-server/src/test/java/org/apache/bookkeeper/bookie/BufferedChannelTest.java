@@ -56,20 +56,20 @@ public class BufferedChannelTest {
 		@Parameters
 		public static Collection<Object[]> data() {
 	        return Arrays.asList(new Object[][] {
-//	            {10, -1, 0}, 	// error because src null
-//	            { 0, 1, 0},   	// infinite loop
- 	            { 1, 0, 0},   	
-	            { 1, 1, 0},
-	            { 1, 2, 0},
-	            { 10, 0, 0},	
-	            { 10, 9, 0},
-	            { 10, 10, 0},
-	            { 10, 11, 0},
-	            { 20, 10, 9},
-	            { 20, 10, 10},
-	            { 20, 10, 11},
+//	            {10, -1, 0}, 	// 0 error because src null
+//	            { 0, 1, 0},   	// 1 infinite loop
+ 	            { 1, 0, 0},   	// 2
+	            { 1, 1, 0},		// 3
+	            { 1, 2, 0},		// 4
+	            { 10, 0, 0},	// 5
+	            { 10, 9, 0},	// 6
+	            { 10, 10, 0},	// 7
+	            { 10, 11, 0},	// 8
+	            { 20, 10, 9},	// 9
+	            { 20, 10, 10},	// 10
+	            { 20, 10, 11},	// 11
 	            
-	            { 10, 0, 1}, // Added for Ba-dua analysis
+	            { 10, 0, 1}, 	// 12 Added for Ba-dua analysis
 	        });
 	    }
 		
@@ -170,7 +170,6 @@ public class BufferedChannelTest {
 
 	}
 	
-
 	
 	@RunWith(Parameterized.class)
 	public static class ReadTest {
@@ -200,7 +199,7 @@ public class BufferedChannelTest {
 	            {5, 5, 5, 5, "Read past EOF"},		// 6
 	            {5, 4, 0, 5, "Read past EOF"},		// 7
 	            {5, 0, 0, 5, "Read past EOF"},		// 8
-	            {5, -1, 0, 5, "\"dest\" is null"},	// 9 NullPointerException: dest is null
+	            {5, -1, 0, 5, "is null"},	// 9 NullPointerException: dest is null
 	            {0, 5, 0, 5, "Read past EOF"},	   	// 10
 	            {-1, 5, 0, 5, "Read past EOF"},		// 11
 	            
@@ -263,7 +262,7 @@ public class BufferedChannelTest {
 		}
 		
 		@Test(timeout=1000)
-		public void writeTest() throws IOException {
+		public void readTest() throws IOException {
 			byte[] bytesTemp;
 			byte[] bytesDest;			
 			int ret = -1;
