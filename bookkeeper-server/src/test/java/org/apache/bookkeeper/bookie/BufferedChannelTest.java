@@ -52,9 +52,7 @@ public class BufferedChannelTest {
 		private int len;
 		private FileChannel fc;
 		private byte[] randomArray;
-		
-		static  private int  count = 0;
-		
+				
 		@Parameters
 		public static Collection<Object[]> data() {
 	        return Arrays.asList(new Object[][] {
@@ -117,8 +115,6 @@ public class BufferedChannelTest {
 		}
 		@Test(timeout=1000)
 		public void writeTest() throws IOException {
-			System.out.println(count);
-			count++;
 			int flushes=0;
 			int lenWB=0;
 			int lenFC=0;
@@ -150,12 +146,10 @@ public class BufferedChannelTest {
 			}
 			
 			// Verify content in Write Buffer
-	        System.out.println("randomArray: " + Arrays.toString(Arrays.copyOfRange(randomArray, 0, randomArray.length)));	        
 	        bytesWB = new byte[lenWB];
 	        bc.writeBuffer.getBytes(0,bytesWB);
 	        bytesTemp = Arrays.copyOfRange(randomArray, randomArray.length - lenWB, randomArray.length);
 	        Assert.assertEquals(Arrays.toString(bytesTemp),Arrays.toString(bytesWB));
-	        System.out.println("temp: " +  Arrays.toString(bytesTemp) + ", wb: " + Arrays.toString(bytesWB));
 
 			// Verify content in File Channel
 	        buff  = ByteBuffer.allocate(lenFC);
@@ -164,10 +158,138 @@ public class BufferedChannelTest {
 	        bytesFC = buff.array();
 	        bytesTemp = Arrays.copyOfRange(randomArray, 0, lenFC);
 	        Assert.assertEquals(Arrays.toString(bytesTemp),Arrays.toString(bytesFC));
-	        System.out.println("temp: " +  Arrays.toString(bytesTemp) + ", fc: " + Arrays.toString(bytesFC));
-	        System.out.println("");
 		}
 		
+		
+	    @After
+	    public void clear() throws IOException {
+            this.bc.clear();
+            this.bc.close();
+	        this.fc.close();
+	    }
+
+	}
+	
+
+	
+	@RunWith(Parameterized.class)
+	public static class ReadTest {
+		// BufferChannel parameters
+		private ByteBuf buffDest;
+		private int writeBufferStartPosition;
+		private int pos;
+		private int lenght;
+		private String expectedOutput;
+		
+		// Test support parameters
+		private ByteBuf temp;
+		private FileChannel fc;
+		private BufferedChannel bc;
+		private int capacity = 10;       // default capacity to 10 (changable parameter)
+		private byte[] randomArray;
+				
+		@Parameters
+		public static Collection<Object[]> data() {
+	        return Arrays.asList(new Object[][] {
+	            {5, 5, 0, -1, "0"},       			// 0
+	            {5, 5, 0, 0, "0"},					// 1
+	            {5, 5, 0, 5, "5"},					// 2
+	            {5, 5, 0, 6, "Read past EOF"},		// 3
+	            {5, 5, -1, 5, "Negative position"},	// 4 IllegalArgumentException: Negative position
+	            {5, 5, 4, 5, "Read past EOF"},		// 5
+	            {5, 5, 5, 5, "Read past EOF"},		// 6
+	            {5, 4, 0, 5, "Read past EOF"},		// 7
+	            {5, 0, 0, 5, "Read past EOF"},		// 8
+	            {5, -1, 0, 5, "\"dest\" is null"},	// 9 NullPointerException: dest is null
+	            {0, 5, 0, 5, "Read past EOF"},	   	// 10
+	            {-1, 5, 0, 5, "Read past EOF"}		// 11
+	        });
+	    }
+		
+		public ReadTest(int writeBufferStartPosition, int dest, int pos, int lenght, String expectedOutput){
+			configure(writeBufferStartPosition, dest, pos, lenght, expectedOutput);
+		}
+		
+		public void configure(int writeBufferStartPosition, int dest, int pos, int lenght, String expectedOutput) {
+			this.writeBufferStartPosition = writeBufferStartPosition;
+			this.pos = pos;
+			this.lenght = lenght;
+			this.expectedOutput = expectedOutput;
+			
+			// initialize dest buffer
+			if(dest < 0) this.buffDest = null;
+			else if (dest == 0) this.buffDest = Unpooled.EMPTY_BUFFER;
+			else this.buffDest = Unpooled.buffer(dest, dest);
+			
+			// Define BufferChannel
+			File testLogFile;
+			try {
+				testLogFile = File.createTempFile("test", "t");
+				testLogFile.deleteOnExit();
+		        RandomAccessFile randomAccessFile = new RandomAccessFile(testLogFile, "rw");
+		        fc = randomAccessFile.getChannel();
+				this.bc = new BufferedChannel(UnpooledByteBufAllocator.DEFAULT, fc, capacity, 0);
+				bc.readBuffer.markReaderIndex();
+				bc.writeBuffer.markWriterIndex();
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+			
+			// Write random characters inside WriteBuffer bc
+			if(writeBufferStartPosition < 0) {
+				this.temp = null;
+				return;                     // don't write content because the bc is null		
+			}
+			else if (writeBufferStartPosition == 0) {
+				this.randomArray = new byte[writeBufferStartPosition];			
+				this.temp = Unpooled.EMPTY_BUFFER;
+			}
+			else {
+		        this.randomArray = new byte[writeBufferStartPosition];
+		        Random random = new Random();
+		        random.nextBytes(randomArray);
+		        this.temp = Unpooled.buffer();
+		        this.temp.writeBytes(randomArray);				
+			}
+			
+			try{
+				bc.write(temp);
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		}
+		
+		@Test(timeout=1000)
+		public void writeTest() throws IOException {
+			byte[] bytesTemp;
+			byte[] bytesDest;			
+			int ret = -1;
+			
+			// Read write buffer
+			try {
+				ret = bc.read(buffDest, pos, lenght);
+			} catch (IOException e) {
+				Assert.assertTrue(e.getMessage().startsWith(expectedOutput));
+				return;
+			} catch (IllegalArgumentException e) {
+				Assert.assertTrue(e.getMessage().startsWith(expectedOutput));		
+				return;
+			} catch (NullPointerException e) {
+				Assert.assertTrue(e.getMessage().contains(expectedOutput));	
+				return;
+			}
+			// verify return value
+	        Assert.assertEquals(ret, Integer.parseInt(expectedOutput));
+	        System.out.println("ret: " +  ret + ", expectedRet: " + expectedOutput);
+
+			// verify content is written correctly. This checks depends to the last check
+	        bytesTemp = Arrays.copyOfRange(randomArray, pos, ret);
+	        bytesDest = new byte[ret];
+	        buffDest.getBytes(pos, bytesDest);
+	        Assert.assertEquals(Arrays.toString(bytesTemp), Arrays.toString(bytesDest));
+	        System.out.println("src: " +  Arrays.toString(bytesTemp) + ", dest: " + Arrays.toString(bytesDest));
+
+		}
 		
 	    @After
 	    public void clear() throws IOException {
