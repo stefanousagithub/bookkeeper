@@ -91,7 +91,7 @@ public class FileInfoTest {
 			}
 		}
 		
-		@Test
+		@Test(timeout=1000)
 		public void moveToNewLocationTest() {
 			boolean flag = false;
 			try {
@@ -182,7 +182,7 @@ public class FileInfoTest {
 			}
 		}
 		
-		@Test
+		@Test(timeout=1000)
 		public void readAbsoluteTest() {
 			try {
 				Assert.assertEquals(expectedResult, Integer.toString(fi.read(bb, start, bestEffort)));
