@@ -33,6 +33,7 @@ public class FileInfoTest {
 		private FileInfo fi;
 		private FileInfo spyFi;
 		private FileChannel mockFc;
+		private byte[] masterKey = {'a', 'b', 'c'};
 		
 		@Parameters
 		public static Collection<Object[]> data() throws IOException {
@@ -46,15 +47,16 @@ public class FileInfoTest {
 	        	// {null, 10, 0, null},													// Error because new file is null
 	        	{new File("/tmp/file"), 10, 0, "false" },								// 6
 	        	{File.createTempFile("origin","file"), 10, 1, "IOException" },			// 7: Mocking delete method
+	        	
+	        	{File.createTempFile("origin","file"), 10, 2, "10" },			// 8: change origin path
 	        });
 	    }
 		
-		public MoveToNewLocationTest(File newFile, long size, int mocking, String expectedResult) {
+		public MoveToNewLocationTest(File newFile, long size, int mocking, String expectedResult) throws IOException {
 				configure(newFile, size, mocking, expectedResult);
 		}
 		
-		public void configure(File newFile, long size, int mocking, String expectedResult) {
-			byte[] masterKey = {'a', 'b', 'c'};
+		public void configure(File newFile, long size, int mocking, String expectedResult) throws IOException {
 			File oldFile = new File("/tmp/file");
 			try {
 				fi = new FileInfo(oldFile, masterKey, 1);
@@ -84,21 +86,21 @@ public class FileInfoTest {
 					// mock delete method: always return false.
 					doReturn(false).when(spyFi).delete();
 					break;
+				case 2:
+					spyFi.moveToNewLocation(File.createTempFile("otherOrigin","file"), size);
 			}
 		}
 		
 		@Test
 		public void moveToNewLocationTest() {
-			// depends on size, isSameFile, delete functions of FileInfo  
 			boolean flag = false;
 			try {
 				spyFi.moveToNewLocation(newFile, size);
 				if("true" == String.valueOf(spyFi.isSameFile(newFile)) && Long.toString(spyFi.size()).equals(expectedResult)) flag = true;
 				if(expectedResult.equals("false")) flag = true;
+				if(masterKey.length != spyFi.getMasterKey().length) flag = false;
 				Assert.assertTrue(flag);
-			} catch (IOException e) {
-				Assert.assertTrue(e.getClass().toString().contains(expectedResult));
-			} catch (NullPointerException e) {
+			} catch (Exception e) {
 				Assert.assertTrue(e.getClass().toString().contains(expectedResult));
 			}
 		}
@@ -131,6 +133,12 @@ public class FileInfoTest {
 	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 4, false, false, "Short read" },				// 6 Short Read
 	        	{ null, ByteBuffer.allocate(5), 0, true, false, "0" },														// 7 null fileChannel
 	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(5), 0, true, true, "FileInfoDeletedException" },	// 8 FileChannel deleted
+	        	
+	        	
+	        	{ ByteBuffer.wrap("abcde".getBytes()), ByteBuffer.allocate(6), 0, true, false, "5" },						// 1
+	        	{ ByteBuffer.wrap("abc".getBytes()), ByteBuffer.allocate(6), 0, true, false, "3" },						// 1
+
+	        	
 	        });
 	    }
 		
