@@ -70,6 +70,7 @@ public class BufferedChannelTest {
 	            { 20, 10, 11},	// 11
 	            
 	            { 10, 0, 1}, 	// 12 Added for Ba-dua analysis
+	            { 20, 19, 9},	// 9 Executes 2 write on disk for the unpersistedBytesBound limit
 	        });
 	    }
 		
@@ -122,6 +123,7 @@ public class BufferedChannelTest {
 			byte[] bytesFC;
 			byte[] bytesTemp;
 			ByteBuffer buff;
+			long pos_init = bc.position();
 			
 			// Write operation
 			try{
@@ -144,6 +146,9 @@ public class BufferedChannelTest {
 				lenFC += lenWB;
 				lenWB = 0;
 			}
+			
+			// Verify position
+			Assert.assertEquals(bc.position(), pos_init + lenWB + lenFC);
 			
 			// Verify content in Write Buffer
 	        bytesWB = new byte[lenWB];
@@ -203,7 +208,7 @@ public class BufferedChannelTest {
 	            {0, 5, 0, 5, "Read past EOF"},	   	// 10
 	            {-1, 5, 0, 5, "Read past EOF"},		// 11
 	            
-	            {6, 5, 0, 5, "5"},					// 2
+	            {5, 5, 1, 2, "2"},					// 12: BUG
 
 	        });
 	    }
@@ -282,14 +287,14 @@ public class BufferedChannelTest {
 			}
 			// verify return value
 	        Assert.assertEquals(ret, Integer.parseInt(expectedOutput));
-	        System.out.println("ret: " +  ret + ", expectedRet: " + expectedOutput);
+	        //System.out.println("ret: " +  ret + ", expectedRet: " + expectedOutput);
 
 			// verify content is written correctly. This checks depends to the last check
 	        bytesTemp = Arrays.copyOfRange(randomArray, pos, ret);
 	        bytesDest = new byte[ret];
 	        buffDest.getBytes(pos, bytesDest);
 	        Assert.assertEquals(Arrays.toString(bytesTemp), Arrays.toString(bytesDest));
-	        System.out.println("src: " +  Arrays.toString(bytesTemp) + ", dest: " + Arrays.toString(bytesDest));
+	        //System.out.println("src: " +  Arrays.toString(bytesTemp) + ", dest: " + Arrays.toString(bytesDest));
 
 		}
 		
